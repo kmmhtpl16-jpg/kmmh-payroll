@@ -4,10 +4,12 @@ import LoginPage from "./LoginPage";
 import AttendancePage from "./AttendancePage";
 import EmployeesPage from "./EmployeesPage";
 import PayrollPage from "./PayrollPage";
+import WeeklySummaryPage from "./WeeklySummaryPage";
 
 const TABS = [
   { id: "attendance", label: "⏱ บันทึกเวลา" },
   { id: "employees",  label: "👥 พนักงาน" },
+  { id: "weekly",     label: "📅 รายอาทิตย์" },
   { id: "payroll",    label: "💰 เงินเดือน" },
 ];
 
@@ -39,6 +41,7 @@ export default function App() {
       <main style={styles.main}>
         {activeTab === "attendance" && <AttendancePage role={role} />}
         {activeTab === "employees"  && <EmployeesPage role={role} />}
+        {activeTab === "weekly"     && <WeeklySummaryPage role={role} />}
         {activeTab === "payroll"    && <PayrollPage role={role} />}
       </main>
     </div>
@@ -55,10 +58,12 @@ const styles = {
     padding:"2px 10px", fontSize:13 },
   logoutBtn: { background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.3)",
     color:"#fff", borderRadius:8, padding:"4px 10px", cursor:"pointer", fontSize:13 },
-  tabBar: { display:"flex", background:"#fff", borderBottom:"2px solid #e2e8f0", padding:"0 1rem" },
-  tabBtn: { padding:"0.75rem 1.25rem", border:"none", background:"none",
-    color:"#64748b", fontSize:14, fontWeight:600, cursor:"pointer",
-    borderBottom:"3px solid transparent", marginBottom:-2, transition:"all 0.15s" },
+  tabBar: { display:"flex", background:"#fff", borderBottom:"2px solid #e2e8f0",
+    padding:"0 1rem", overflowX:"auto" },
+  tabBtn: { padding:"0.75rem 1rem", border:"none", background:"none",
+    color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer",
+    borderBottom:"3px solid transparent", marginBottom:-2,
+    transition:"all 0.15s", whiteSpace:"nowrap" },
   tabBtnActive: { color:"#2563eb", borderBottom:"3px solid #2563eb" },
   main: { flex:1, padding:"1rem" },
 };
