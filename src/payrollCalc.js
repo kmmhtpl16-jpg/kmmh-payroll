@@ -6,6 +6,9 @@
 
 import { supabase } from "./supabaseClient";
 
+// deduction_type_id ของ "เบิกเงินสด" — แยกออกจาก other_deduct ไปอยู่ใน advance_total
+const ADVANCE_DEDUCTION_TYPE_ID = "eb37bbd8-3636-4c37-a4dc-59b04a03ac61";
+
 // ════════════════════════════════════════════════════════════
 // Helpers
 // ════════════════════════════════════════════════════════════
@@ -192,17 +195,23 @@ export async function calcPayroll(year, month) {
     const insurance_refund = 0;
 
     // ปกส.
-    const ss_base = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
+    const ss_base = permStartInMonth ? perm_base : base_wage;
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
     // ประกันงาน
     const insuranceLevelMap = { none: 0, level_200: 200, level_500: 500 };
     const job_insurance = isPerm ? (insuranceLevelMap[emp.insurance_level] || 0) : 0;
 
-    // รายจ่ายพนักงาน (other_deduct)
-    const other_deduct = empDeductions.reduce((s, d) => s + parseFloat(d.amount || 0), 0);
+    // รายจ่ายพนักงาน — แยก "เบิกเงินสด" ออกจาก other_deduct ไปรวมใน advance_total
+    const other_deduct = empDeductions
+      .filter(d => d.deduction_type_id !== ADVANCE_DEDUCTION_TYPE_ID)
+      .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
+    const deduct_advance = empDeductions
+      .filter(d => d.deduction_type_id === ADVANCE_DEDUCTION_TYPE_ID)
+      .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
     const loan_deduct  = 0; // ยังไม่มี loan table
-    const advance_total = empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0);
+    const advance_total = parseFloat(empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0).toFixed(2))
+      + deduct_advance;
 
     const total_income = parseFloat((
       base_wage + holiday_wage + ot_amount + position_allowance +
