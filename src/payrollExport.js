@@ -1,7 +1,6 @@
 // src/payrollExport.js
 // ─────────────────────────────────────────────────────────────
-// Export Excel สรุปเงินเดือน KMMH — format เหมือน Excel เดิม
-// ใช้ SheetJS (xlsx) ที่ install ใน Vite แล้ว
+// Export Excel สรุปเงินเดือน KMMH — ใช้ output จาก calcPayroll()
 // ─────────────────────────────────────────────────────────────
 
 import * as XLSX from "xlsx";
@@ -19,12 +18,10 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
   // ════════════════════════════════════════════════════════
   const wsData = [];
 
-  // Row 1: title
   wsData.push(["ปี", yearBE, "เดือน", monthName, "จำนวน", daysInMonth, "วัน",
     "รอบเงินเดือน", null, `1-${daysInMonth} ${monthName}`, null,
-    "วันที่ชำระ", null, null, null]);
+    "วันที่ชำระ", null, null, null, null]);
 
-  // Row 2-3: headers
   wsData.push(["ลำดับ","ชื่อเล่น","ชื่อ-สกุล",null,
     "เงินเดือน","ค่าแรง/วัน","ค่าแรง/ชม.",
     "วันทำงาน","OT(ชม.)","เงินประจำตำแหน่ง","เบี้ยขยัน",
@@ -38,14 +35,14 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
     "วันทำงาน","OT(ชม.)","เงินประจำตำแหน่ง","เบี้ยขยัน",
     "รายได้ทั้งหมด","รายจ่ายทั้งหมด",null,null]);
 
-  // Data rows
   results.forEach((r, i) => {
     wsData.push([
       i + 1,
       r.nickname,
       r.full_name,
       null,
-      r.emp_type === "permanent" ? r.base_wage / r.work_days * daysInMonth : null, // monthly_salary
+      // ✅ monthly_salary ตรงๆ ไม่คำนวณใหม่
+      r.emp_type === "permanent" ? r.monthly_salary : null,
       parseFloat(r.daily_rate.toFixed(2)),
       parseFloat(r.hourly_rate.toFixed(2)),
       r.work_days,
@@ -57,7 +54,8 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
       r.leave_deduct,
       r.job_insurance,
       r.advance_total,
-      r.loan_deduct + r.other_deduct,
+      // ✅ other_deduct รวม loan
+      parseFloat((r.loan_deduct + r.other_deduct).toFixed(2)),
       parseFloat(r.social_security.toFixed(2)),
       parseFloat(r.base_wage.toFixed(2)),
       parseFloat(r.ot_amount.toFixed(2)),
@@ -70,23 +68,24 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
     ]);
   });
 
-  // Summary row
+  // ✅ summary row — ไม่ hardcode 0
   wsData.push([
     null, "รวม", null, null, null, null, null,
-    results.reduce((s,r)=>s+r.work_days, 0),
-    parseFloat(results.reduce((s,r)=>s+r.ot_hours,0).toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.position_allowance,0).toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.diligence_bonus,0).toFixed(2)),
-    results.reduce((s,r)=>s+r.late_minutes,0),
-    results.reduce((s,r)=>s+r.leave_days,0),
-    0, // leave_deduct
-    parseFloat(results.reduce((s,r)=>s+r.job_insurance,0).toFixed(2)),
-    0, 0, // advance, loan
+    results.reduce((s,r) => s + r.work_days, 0),
+    parseFloat(results.reduce((s,r) => s + r.ot_hours, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.position_allowance, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.diligence_bonus, 0).toFixed(2)),
+    results.reduce((s,r) => s + r.late_minutes, 0),
+    results.reduce((s,r) => s + r.leave_days, 0),
+    parseFloat(results.reduce((s,r) => s + r.leave_deduct, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.job_insurance, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.advance_total, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.loan_deduct + r.other_deduct, 0).toFixed(2)),
     parseFloat(summary.total_ss.toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.base_wage,0).toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.ot_amount,0).toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.position_allowance,0).toFixed(2)),
-    parseFloat(results.reduce((s,r)=>s+r.diligence_bonus,0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.base_wage, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.ot_amount, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.position_allowance, 0).toFixed(2)),
+    parseFloat(results.reduce((s,r) => s + r.diligence_bonus, 0).toFixed(2)),
     parseFloat(summary.total_income.toFixed(2)),
     parseFloat(summary.total_deduct.toFixed(2)),
     summary.total_net_pay,
@@ -94,8 +93,6 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
   ]);
 
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-  // Column widths
   ws["!cols"] = [
     {wch:6},{wch:10},{wch:20},{wch:4},
     {wch:10},{wch:10},{wch:10},
@@ -104,7 +101,6 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
     {wch:12},{wch:8},{wch:14},{wch:10},
     {wch:14},{wch:14},{wch:14},{wch:30},
   ];
-
   XLSX.utils.book_append_sheet(wb, ws, "เงินเดือน");
 
   // ════════════════════════════════════════════════════════
@@ -144,17 +140,18 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
         parseFloat((r.social_security * 2).toFixed(2)),
       ]);
     });
+
   const ss_total = results.reduce((s,r) => s + r.social_security, 0);
   ws3Data.push(["รวม", null, null, null,
     parseFloat(ss_total.toFixed(2)),
     parseFloat(ss_total.toFixed(2)),
     parseFloat((ss_total * 2).toFixed(2)),
   ]);
+
   const ws3 = XLSX.utils.aoa_to_sheet(ws3Data);
   ws3["!cols"] = [{wch:10},{wch:22},{wch:10},{wch:16},{wch:18},{wch:18},{wch:14}];
   XLSX.utils.book_append_sheet(wb, ws3, "สรุปเงินเดือนพนักงาน ปกส");
 
-  // ── Download ─────────────────────────────────────────────
   const fileName = `เงินเดือน_${monthName}_${yearBE}.xlsx`;
   XLSX.writeFile(wb, fileName);
 }
