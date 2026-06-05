@@ -13,8 +13,8 @@ const TABS = [
   { id: "employees",   label: "👥 พนักงาน" },
   { id: "deductions",  label: "📋 รายจ่ายพนักงาน" },
   { id: "payroll",     label: "💰 เงินเดือน" },
-  { id: "weekly",      label: "📅 รายอาทิตย์" },
   { id: "weekly",      label: "💸 รายจ่ายบริษัท" },
+  { id: "settings",    label: "⚙️ วันหยุด" },
 ];
 
 export default function App() {
