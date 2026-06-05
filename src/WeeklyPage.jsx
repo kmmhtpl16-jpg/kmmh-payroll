@@ -161,15 +161,14 @@ export default function WeeklyPage({ role }) {
   }
 
   // คำนวณยอดสิ้นเดือนรายคน
+  // ใช้ month_end_pay จาก payrollCalc โดยตรง (แหล่งความจริงเดียว)
+  // ไม่ครอบ Math.max → ถ้าติดลบให้แสดงตามจริง คนดูจะได้รู้ว่าค่าอาทิตย์ยังไม่ครบ
+  // สูตร = เบี้ยขยัน + OT + ค่าอาทิตย์ − ปกส. − ประกันงาน
   function getMonthEndPay(r) {
-    const isME = r.employees?.pay_schedule === "end_of_month";
-    return Math.max(0, isME
-      ? (r.base_wage||0) + (r.holiday_wage||0) + (r.ot_amount||0)
-        - (r.late_deduct||0) - (r.social_security||0)
-        - (r.job_insurance||0) - (r.other_deduct||0) - (r.advance_total||0)
-      : (r.holiday_wage||0) + (r.ot_amount||0)
-        - (r.social_security||0) - (r.job_insurance||0)
-    );
+    if (r.month_end_pay != null) return r.month_end_pay;
+    // fallback กรณี record เก่ายังไม่มี field นี้
+    return (r.diligence_bonus||0) + (r.ot_amount||0) + (r.holiday_wage||0)
+         - (r.social_security||0) - (r.job_insurance||0);
   }
 
   const monthEndTotal = payrolls.reduce((sum, r) => sum + getMonthEndPay(r), 0);
