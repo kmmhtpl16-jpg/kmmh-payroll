@@ -73,10 +73,10 @@ export default function WeeklyPage({ role }) {
         .order("cycle_date");
       setCycles(cyc || []);
 
-      // 3. payroll_records
+      // 3. payroll_records — ดึง pay_schedule ด้วย
       const { data: pr } = await supabase
         .from("payroll_records")
-        .select("*, employees(nickname, full_name, emp_type, emp_code)")
+        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule)")
         .eq("period_id", period.id);
       setPayrolls(pr || []);
 
@@ -156,10 +156,10 @@ export default function WeeklyPage({ role }) {
     setMarkingMonthEnd(false);
   };
 
-  // คำนวณยอดจ่ายรอบนี้รายคน
+  // คำนวณยอดจ่ายรอบนี้รายคน — เฉพาะ pay_schedule=saturday เท่านั้น
   function getCycleRows(cycle) {
     const logMap = cycleLogs[cycle.id] || {};
-    return payrolls.map(r => {
+    return payrolls.filter(r => r.employees?.pay_schedule !== "end_of_month").map(r => {
       const cycleDays  = logMap[r.employee_id] || 0;
       const cycleWage  = calcCycleWage(r, cycleDays);
       const advAmt     = advances
@@ -173,7 +173,7 @@ export default function WeeklyPage({ role }) {
   return (
     <div style={s.page}>
       <div style={s.header}>
-        <h2 style={s.title}>� รายจ่ายบริษัท</h2>
+        <h2 style={s.title}>📅 รายอาทิตย์</h2>
         <button onClick={loadAll} style={s.refreshBtn}>🔄 โหลดใหม่</button>
       </div>
 
@@ -317,16 +317,22 @@ export default function WeeklyPage({ role }) {
             <table style={s.table}>
               <thead>
                 <tr>
-                  {["ชื่อ","ประเภท","อาทิตย์(วัน)","ค่าอาทิตย์","OT(ชม.)","ค่า OT","ปกส.","ประกันงาน","จ่ายสิ้นเดือน",""].map(h => (
+                  {["ชื่อ","ประเภท","รอบจ่าย","อาทิตย์(วัน)","ค่าอาทิตย์","OT(ชม.)","ค่า OT","ปกส.","ประกันงาน","จ่ายสิ้นเดือน",""].map(h => (
                     <th key={h} style={s.th}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {payrolls.map(r => {
-                  const monthEndPay = Math.max(0,
-                    (r.holiday_wage || 0) + (r.ot_amount || 0)
-                    - (r.social_security || 0) - (r.job_insurance || 0)
+                  const isMonthEnd = r.employees?.pay_schedule === "end_of_month";
+                  // end_of_month: รับทุกอย่างสิ้นเดือน (ค่าแรง+อาทิตย์+OT−ทุกหัก)
+                  // saturday: รับแค่ อาทิตย์+OT−ปกส.−ประกันงาน (ค่าแรงรับรายเสาร์แล้ว)
+                  const monthEndPay = Math.max(0, isMonthEnd
+                    ? (r.base_wage || 0) + (r.holiday_wage || 0) + (r.ot_amount || 0)
+                      - (r.late_deduct || 0) - (r.social_security || 0)
+                      - (r.job_insurance || 0) - (r.other_deduct || 0) - (r.advance_total || 0)
+                    : (r.holiday_wage || 0) + (r.ot_amount || 0)
+                      - (r.social_security || 0) - (r.job_insurance || 0)
                   );
                   return (
                     <tr key={r.employee_id} style={s.tr}>
@@ -336,6 +342,19 @@ export default function WeeklyPage({ role }) {
                       </td>
                       <td style={{ ...s.td, color:"#64748b" }}>
                         {r.employees?.emp_type === "permanent" ? "ประจำ" : "ทดลอง"}
+                      </td>
+                      <td style={{ ...s.td, textAlign:"center" }}>
+                        <span style={{
+                          fontSize:12, padding:"3px 10px", borderRadius:20, fontWeight:700,
+                          letterSpacing:0.3,
+                          background: isMonthEnd ? "#7c3aed" : "#0ea5e9",
+                          color: "#fff",
+                          boxShadow: isMonthEnd
+                            ? "0 1px 4px rgba(124,58,237,0.4)"
+                            : "0 1px 4px rgba(14,165,233,0.4)",
+                        }}>
+                          {isMonthEnd ? "💜 สิ้นเดือน" : "🔵 รายเสาร์"}
+                        </span>
                       </td>
                       <td style={{ ...s.td, textAlign:"right" }}>{r.holiday_days || 0} วัน</td>
                       <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.holiday_wage)}</td>
@@ -354,8 +373,12 @@ export default function WeeklyPage({ role }) {
                       <td style={{ ...s.td, textAlign:"center" }}>
                         <button
                           onClick={() => setDetail({ record: r,
-                            cycleWage: (r.holiday_wage||0)+(r.ot_amount||0),
-                            advAmt: (r.social_security||0)+(r.job_insurance||0),
+                            cycleWage: isMonthEnd
+                              ? (r.base_wage||0)+(r.holiday_wage||0)+(r.ot_amount||0)
+                              : (r.holiday_wage||0)+(r.ot_amount||0),
+                            advAmt: isMonthEnd
+                              ? (r.late_deduct||0)+(r.social_security||0)+(r.job_insurance||0)+(r.other_deduct||0)+(r.advance_total||0)
+                              : (r.social_security||0)+(r.job_insurance||0),
                             toPay: monthEndPay,
                             cycleDays: r.holiday_days || 0,
                             isMonthEnd: true })}
@@ -367,14 +390,17 @@ export default function WeeklyPage({ role }) {
               </tbody>
               <tfoot>
                 <tr style={{ background:"#f5f3ff" }}>
-                  <td style={s.td} colSpan={8}>
+                  <td style={s.td} colSpan={9}>
                     <span style={{ fontWeight:700, color:"#4c1d95" }}>รวมที่ต้องจ่ายสิ้นเดือน</span>
                   </td>
                   <td style={{ ...s.td, textAlign:"right",
                     fontWeight:800, fontSize:17, color:"#4c1d95" }}>
-                    {fmtInt(payrolls.reduce((sum, r) => sum + Math.max(0,
-                      (r.holiday_wage||0)+(r.ot_amount||0)-(r.social_security||0)-(r.job_insurance||0)
-                    ), 0))}
+                    {fmtInt(payrolls.reduce((sum, r) => {
+                      const isME = r.employees?.pay_schedule === "end_of_month";
+                      return sum + Math.max(0, isME
+                        ? (r.base_wage||0)+(r.holiday_wage||0)+(r.ot_amount||0)-(r.late_deduct||0)-(r.social_security||0)-(r.job_insurance||0)-(r.other_deduct||0)-(r.advance_total||0)
+                        : (r.holiday_wage||0)+(r.ot_amount||0)-(r.social_security||0)-(r.job_insurance||0));
+                    }, 0))}
                   </td>
                   <td style={s.td} />
                 </tr>
