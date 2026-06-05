@@ -35,12 +35,14 @@ function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
   return hourlyRate * fullHours + remainder * rate;
 }
 
-// เบี้ยขยัน
+// เบี้ยขยัน — trial ไม่ได้เลย
+// [แก้ #4] trial → 0 เสมอ
 function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
+  if (empType !== "permanent") return 0;
   if (hasLeave) return 0;
   if (totalLateMin > 5) return 0;
-  if (totalLateMin >= 1) return empType === "permanent" ? 300 : 300;
-  return empType === "permanent" ? 500 : 500;
+  if (totalLateMin >= 1) return 300;
+  return 500;
 }
 
 // ปกส. 5% cap 875
@@ -99,20 +101,22 @@ export async function calcPayroll(year, month) {
     .gte("deduct_date", dateFrom)
     .lte("deduct_date", dateTo);
 
-  // ── ดึง advance_requests ──
+  // ── ดึง advance_requests — กรองเฉพาะเดือนนี้ด้วย request_date ──
+  // [แก้ #2] เพิ่ม date filter กันนับ advance ข้ามเดือนซ้ำ
   const { data: advances } = await supabase
     .from("advance_requests")
     .select("employee_id, amount")
-    .in("employee_id", empIds);
-  // NOTE: กรองตาม cycle ที่อยู่ในเดือนนี้ — ตอนนี้ดึงทั้งหมดก่อน รอ cycle table
+    .in("employee_id", empIds)
+    .gte("request_date", dateFrom)
+    .lte("request_date", dateTo);
 
   // ── คำนวณรายคน ──
   const results = [];
 
   for (const emp of employees) {
-    const empLogs = (logs || []).filter(l => l.employee_id === emp.id);
-    const empDeductions = (deductions || []).filter(d => d.employee_id === emp.id);
-    const empAdvances = (advances || []).filter(a => a.employee_id === emp.id);
+    const empLogs        = (logs       || []).filter(l => l.employee_id === emp.id);
+    const empDeductions  = (deductions || []).filter(d => d.employee_id === emp.id);
+    const empAdvances    = (advances   || []).filter(a => a.employee_id === emp.id);
 
     // rate ตั้งต้น
     const dailyTrial = parseFloat(emp.daily_rate) || 0;
@@ -124,18 +128,17 @@ export async function calcPayroll(year, month) {
     const permStartInMonth = permStart &&
       permStart >= dateFrom && permStart <= dateTo;
 
-    let work_days = 0;
+    let work_days    = 0;
     let holiday_days = 0;
-    let ot_hours = 0;
+    let ot_hours     = 0;
     let late_minutes = 0;
-    let late_deduct = 0;
-    let perm_base = 0;
-    let trial_base = 0;
-    let has_review = false;
-    let has_leave = false;
+    let late_deduct  = 0;
+    let perm_base    = 0;
+    let trial_base   = 0;
+    let has_review   = false;
+    let has_leave    = false;
 
     for (const log of empLogs) {
-      // ถ้ายังต้องตรวจ → flag แต่ยังคำนวณต่อด้วยข้อมูลที่มี
       if (log.needs_hr_review) has_review = true;
 
       const isHoliday = isSunday(log.work_date);
@@ -146,21 +149,20 @@ export async function calcPayroll(year, month) {
       }
 
       // เลือก daily rate ของวันนี้
-      const usePerm = isPerm && (!permStartInMonth || log.work_date >= permStart);
-      const dayRate = usePerm ? dailyPerm : dailyTrial;
+      const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
+      const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
 
       work_days += 1;
 
-      // base_wage แยกช่วง
-      if (usePerm) perm_base += dayRate;
-      else trial_base += dayRate;
+      if (usePerm) perm_base  += dayRate;
+      else         trial_base += dayRate;
 
       // late
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
       const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
-      late_deduct += calcLateDeduction(lateMin, rateTag, hourlyRate);
+      late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
       // OT
       ot_hours += parseFloat(log.ot_hours || 0);
@@ -168,7 +170,7 @@ export async function calcPayroll(year, month) {
       // hr_extra_deduct (ออกระหว่างวัน)
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // ลา — ถ้า hr_note มีคำว่าลา → ตัดเบี้ยขยัน
+      // ลา — ถ้า hr_note มีคำว่าลา/ขาด → ตัดเบี้ยขยัน
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
 
@@ -180,14 +182,15 @@ export async function calcPayroll(year, month) {
     ).toFixed(2));
     const ot_amount    = parseFloat((hourly_rate * ot_hours).toFixed(2));
 
-    // position_allowance และ diligence_bonus จาก employees table
     const position_allowance = parseFloat(emp.position_allowance || 0);
     const diligence_bonus    = calcDiligenceBonus(late_minutes, has_leave, emp.emp_type);
 
     // app_fee (ค่าสมัคร 100 บาท)
-    const isFirstMonth = emp.trial_start_date >= dateFrom && emp.trial_start_date <= dateTo;
-    const isResigningThisMonth = emp.resigned_date &&
-      emp.resigned_date >= dateFrom && emp.resigned_date <= dateTo;
+    // [แก้ #3] slice(0,10) กันกรณี timestamp มี timezone ทำให้เทียบผิด
+    const trialStart = (emp.trial_start_date || "").slice(0, 10);
+    const resignDate = (emp.resigned_date    || "").slice(0, 10);
+    const isFirstMonth         = trialStart >= dateFrom && trialStart <= dateTo;
+    const isResigningThisMonth = resignDate  >= dateFrom && resignDate  <= dateTo;
     const app_fee_deduct = (isFirstMonth && emp.app_fee_status === "none") ? 100 : 0;
     const app_fee_refund = (isResigningThisMonth && emp.app_fee_status === "held") ? 100 : 0;
 
@@ -195,23 +198,27 @@ export async function calcPayroll(year, month) {
     const insurance_refund = 0;
 
     // ปกส.
-    const ss_base = permStartInMonth ? perm_base : base_wage;
+    // [แก้ #1] ใช้ monthly_salary เป็นฐาน ไม่ใช่ base_wage
+    //   → ปกส. ไม่เปลี่ยนแม้พนักงานลาบางวัน (ตรงกับ Excel จริง)
+    //   → กรณีเข้าประจำกลางเดือน ยังใช้ perm_base (ค่าแรงช่วงประจำ) เหมือนเดิม
+    const ss_base         = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
     // ประกันงาน
     const insuranceLevelMap = { none: 0, level_200: 200, level_500: 500 };
     const job_insurance = isPerm ? (insuranceLevelMap[emp.insurance_level] || 0) : 0;
 
-    // รายจ่ายพนักงาน — แยก "เบิกเงินสด" ออกจาก other_deduct ไปรวมใน advance_total
-    const other_deduct = empDeductions
+    // รายจ่าย — แยก "เบิกเงินสด" ออกจาก other_deduct ไปรวมใน advance_total
+    const other_deduct   = empDeductions
       .filter(d => d.deduction_type_id !== ADVANCE_DEDUCTION_TYPE_ID)
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
     const deduct_advance = empDeductions
       .filter(d => d.deduction_type_id === ADVANCE_DEDUCTION_TYPE_ID)
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
-    const loan_deduct  = 0; // ยังไม่มี loan table
-    const advance_total = parseFloat(empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0).toFixed(2))
-      + deduct_advance;
+    const loan_deduct    = 0; // ยังไม่มี loan table
+    const advance_total  = parseFloat(
+      (empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0) + deduct_advance).toFixed(2)
+    );
 
     const total_income = parseFloat((
       base_wage + holiday_wage + ot_amount + position_allowance +
@@ -244,8 +251,8 @@ export async function calcPayroll(year, month) {
       diligence_bonus,
       late_minutes,
       late_deduct:       parseFloat(late_deduct.toFixed(2)),
-      leave_days:        0,        // ทาง A — ไม่ใช้
-      leave_deduct:      0,        // ทาง A — ไม่ใช้
+      leave_days:        0,
+      leave_deduct:      0,
       social_security,
       job_insurance,
       app_fee_deduct,
@@ -287,7 +294,6 @@ function usePermRate(emp, permStart, dateFrom) {
 // savePayrollResults — บันทึกลง payroll_records
 // ════════════════════════════════════════════════════════════
 export async function savePayrollResults(year, month, results) {
-  // ดึง period_id
   const { data: period, error: pErr } = await supabase
     .from("pay_periods")
     .select("id")
