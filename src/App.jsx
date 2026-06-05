@@ -14,7 +14,7 @@ const TABS = [
   { id: "deductions",  label: "📋 รายจ่ายพนักงาน" },
   { id: "payroll",     label: "💰 เงินเดือน" },
   { id: "weekly",      label: "📅 รายอาทิตย์" },
-  { id: "settings",    label: "⚙️ วันหยุด" },
+  { id: "weekly",      label: "💸 รายจ่ายบริษัท" },
 ];
 
 export default function App() {
