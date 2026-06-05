@@ -127,11 +127,10 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// แยกเวลาหลายตัวในช่องเดียว ("07:53 13:49") + ลบตัวซ้ำ
+// splitTimes — แยกเวลาหลายตัวในช่องเดียว + ลบตัวซ้ำ
 //
-// ⚠️ ไม่ sort() — เวลาต้องเรียงตามลำดับที่สแกนจริง
-//    (ZKTeco export ลำดับสแกน ไม่ใช่เรียงตัวอักษร)
-//    การ sort จะเกิดก็ต่อเมื่อ dedupe กรณี 5+ punch เท่านั้น
+// ⚠️ ไม่ sort() ที่นี่ — เก็บลำดับ export จาก ZKTeco ไว้
+//    การ sort จะทำเฉพาะใน assignPunches กรณี 5+ punch เท่านั้น
 // ════════════════════════════════════════════════════════════════
 function splitTimes(s) {
   if (!s || !s.trim()) return [];
@@ -142,8 +141,7 @@ function splitTimes(s) {
       out.push(p);
     }
   }
-  // ❌ ไม่ sort() ที่นี่ — ลำดับสแกนสำคัญ
-  return out;
+  return out; // ❌ ไม่ sort — ลำดับสแกนสำคัญ
 }
 
 // แปลงวันที่ MM/DD/YYYY (ค.ศ.) → YYYY-MM-DD
@@ -158,29 +156,33 @@ function parseDate(s) {
 // assignPunches — แปลง punches ดิบ → 4 จุดมาตรฐาน
 //
 // กลยุทธ์:
-//   4 punches (ins=2, outs=2) → ปกติ assign ตรง
-//   < 4                       → ใส่เท่าที่จับได้ + needsReview
-//   5+ punches                → ZKTeco export ผิด (สแกนซ้ำ/เครื่องพัง)
-//     1. dedupe + sort เวลา
-//     2. ถ้าเหลือ 4 → assign ปกติ + needsReview ให้ HR ยืนยัน
-//     3. ถ้ายังเกิน 4 → เลือก [0][1][-2][-1] + needsReview
+//   4 punches (ins=2, outs=2) → ปกติ assign ตรง ไม่ต้อง review
+//   5+ punches (ZKTeco สแกนซ้ำ/เครื่องพัง):
+//     → dedupe ทั้ง ins+outs รวมกัน แล้ว sort เวลา
+//     → เวลาทำงานไม่ข้ามเที่ยงคืน ดังนั้น sort น้อย→มาก
+//       = checkIn < lunchOut < lunchIn < checkOut เสมอ ✅
+//     → ถ้าเหลือ 4 → assign ได้อัตโนมัติ แต่ยัง flag 🟡 ให้ HR ยืนยัน
+//     → ถ้าเหลือ > 4 → ยัง ambiguous → flag 🟡 + reason ให้ HR แก้มือ
+//   < 4 punches → ใส่เท่าที่มี + flag 🟡
 // ════════════════════════════════════════════════════════════════
 function assignPunches(ins, outs) {
   const all = [...ins, ...outs];
 
-  // เคสปกติ
-  if (all.length === 4 && ins.length === 2 && outs.length === 2) {
+  // ── เคสปกติ: ins=2, outs=2 ──
+  if (ins.length === 2 && outs.length === 2) {
+    // ZKTeco format: เวลาเข้างาน = [เข้าเช้า, กลับพัก]
+    //                เวลาออกงาน  = [ออกพัก,   เลิกงาน]
     return {
       checkIn:  ins[0],
-      lunchIn:  ins[1],
       lunchOut: outs[0],
+      lunchIn:  ins[1],
       checkOut: outs[1],
       needsReview: false,
       reason: "",
     };
   }
 
-  // ไม่มีข้อมูลเลย
+  // ── ไม่มีข้อมูลเลย ──
   if (all.length === 0) {
     return {
       checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
@@ -189,36 +191,37 @@ function assignPunches(ins, outs) {
     };
   }
 
-  // 5+ punch → ZKTeco export ผิด
+  // ── 5+ punch: ZKTeco export ผิด (สแกนซ้ำ/เครื่องค้าง) ──
   if (all.length >= 5) {
-    // dedupe ก่อน (12:01 อาจซ้ำระหว่าง ins กับ outs)
-    // sort ได้ตรงนี้ เพราะเราไม่รู้ลำดับที่แน่นอนแล้ว
+    // dedupe ข้ามทั้ง ins+outs (เช่น "12:01" อยู่ทั้งสองฝั่ง)
+    // แล้ว sort เวลา — ใช้ได้เพราะเวลาทำงานไม่ข้ามเที่ยงคืน
+    // checkIn < lunchOut < lunchIn < checkOut เสมอ
     const clean = [...new Set(all)].sort();
 
     if (clean.length === 4) {
-      // หลัง dedupe เหลือพอดี 4 → assign ปกติ แต่ยัง flag ให้ HR ตรวจ
+      // dedupe เหลือพอดี 4 → assign อัตโนมัติ + flag ให้ HR ยืนยัน
       return {
         checkIn:  clean[0],
-        lunchIn:  clean[1],
-        lunchOut: clean[2],
+        lunchOut: clean[1],
+        lunchIn:  clean[2],
         checkOut: clean[3],
         needsReview: true,
-        reason: `ZKTime export ${all.length} punches (มี duplicate) — ระบบ dedupe เหลือ 4 กรุณาตรวจ`,
+        reason: `ZKTime export ${all.length} punches (มี duplicate) — ระบบ dedupe+เรียงเวลาอัตโนมัติ กรุณายืนยัน`,
       };
     }
 
-    // ยังเกิน 4 แม้ dedupe → เลือก [0][1][-2][-1]
+    // dedupe แล้วยังเกิน 4 → ambiguous เกินไป ให้ HR แก้มือ
     return {
       checkIn:  clean[0],
-      lunchIn:  clean[1],
-      lunchOut: clean[clean.length - 2],
+      lunchOut: clean[1],
+      lunchIn:  clean[clean.length - 2],
       checkOut: clean[clean.length - 1],
       needsReview: true,
       reason: `ZKTime export ${all.length} punches (${clean.length} unique) — ระบบเลือกอัตโนมัติ กรุณาตรวจ`,
     };
   }
 
-  // < 4 punch — ใส่เท่าที่มี
+  // ── < 4 punch: ใส่เท่าที่มี ──
   const result = {
     checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
     needsReview: true,
@@ -226,7 +229,7 @@ function assignPunches(ins, outs) {
   };
 
   if (ins.length === 2 && outs.length === 1) {
-    result.checkIn = ins[0]; result.lunchIn = ins[1]; result.lunchOut = outs[0];
+    result.checkIn = ins[0]; result.lunchOut = ins[1]; result.lunchIn = outs[0];
     result.reason = "ยังไม่สแกนออกเย็น";
   } else if (ins.length === 1 && outs.length === 1) {
     result.checkIn = ins[0]; result.lunchOut = outs[0];
@@ -236,8 +239,8 @@ function assignPunches(ins, outs) {
     result.reason = "มีแค่เข้าเช้า";
   } else {
     if (ins[0])  result.checkIn  = ins[0];
-    if (ins.length > 1) result.lunchIn = ins[ins.length - 1];
-    if (outs[0]) result.lunchOut = outs[0];
+    if (ins.length > 1) result.lunchOut = ins[ins.length - 1];
+    if (outs[0]) result.lunchIn  = outs[0];
     if (outs.length > 1) result.checkOut = outs[outs.length - 1];
     result.reason = `สแกนผิดปกติ (เข้า ${ins.length}, ออก ${outs.length})`;
   }
@@ -246,20 +249,20 @@ function assignPunches(ins, outs) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Parse CSV จากเครื่อง (รูปแบบ 3.csv)
+// parseZKTecoCSV — Parse CSV จากเครื่อง ZKTeco
 //   header: รหัสพนักงาน,ชื่อ,วันที่,เวลาเข้างาน,เวลาออกงาน
-//   คืน array ของ { date, deviceUid, deviceName, empCode,
-//                   checkIn, lunchOut, lunchIn, checkOut,
-//                   needsReview, reason }
+//   คืน { rows[], skipped[] }
+//   rows: { date, deviceUid, deviceName, empCode,
+//           checkIn, lunchOut, lunchIn, checkOut,
+//           needsReview, reason }
 // ════════════════════════════════════════════════════════════════
 export function parseZKTecoCSV(text) {
-  // ลบ BOM
-  text = text.replace(/^\uFEFF/, "");
+  text = text.replace(/^\uFEFF/, ""); // ลบ BOM
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return { rows: [], skipped: [] };
 
   const rows = [];
-  const skipped = [];   // เลขเครื่องที่ไม่มีใน map (คนลาออก/PC) → ข้าม
+  const skipped = []; // เลขเครื่องที่ไม่มีใน map (คนลาออก/PC) → ข้าม
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
@@ -278,14 +281,12 @@ export function parseZKTecoCSV(text) {
     const ins  = splitTimes(inS);
     const outs = splitTimes(outS);
 
-    const assigned = assignPunches(ins, outs);
-
     rows.push({
       date,
       deviceUid: devUid,
       deviceName: devName,
       empCode,
-      ...assigned,
+      ...assignPunches(ins, outs),
     });
   }
 
