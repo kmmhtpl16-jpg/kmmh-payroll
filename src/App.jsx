@@ -5,6 +5,7 @@ import AttendancePage from "./AttendancePage";
 import EmployeesPage from "./EmployeesPage";
 import DeductionsPage from "./DeductionsPage";
 import PayrollPage from "./PayrollPage";
+import WeeklyPage from "./WeeklyPage";
 import SettingsPage from "./SettingsPage";
 
 const TABS = [
@@ -12,7 +13,8 @@ const TABS = [
   { id: "employees",   label: "👥 พนักงาน" },
   { id: "deductions",  label: "📋 รายจ่ายพนักงาน" },
   { id: "payroll",     label: "💰 เงินเดือน" },
-  { id: "settings",    label: "📅 วันหยุด" },
+  { id: "weekly",      label: "📅 รายอาทิตย์" },
+  { id: "settings",    label: "⚙️ วันหยุด" },
 ];
 
 export default function App() {
@@ -43,6 +45,7 @@ export default function App() {
         {activeTab === "employees"   && <EmployeesPage role={role} />}
         {activeTab === "deductions"  && <DeductionsPage role={role} />}
         {activeTab === "payroll"     && <PayrollPage role={role} />}
+        {activeTab === "weekly"      && <WeeklyPage role={role} />}
         {activeTab === "settings"    && <SettingsPage role={role} />}
       </main>
     </div>
