@@ -1,115 +1,88 @@
-// src/SettingsPage.jsx
-// ─────────────────────────────────────────────────────────────
-// หน้าตั้งค่า KMMH Payroll
-// ปัจจุบันมี: จัดการวันหยุดบริษัท
-// ─────────────────────────────────────────────────────────────
-
+// src/SettingsPage.jsx — หน้าวันหยุดบริษัท
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 
 const MONTHS_TH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.",
   "ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
-// วันหยุดราชการไทย 2569 (preset ให้เลือกได้)
-const TH_HOLIDAYS_2569 = [
-  { holiday_date: "2026-01-01", name: "วันขึ้นปีใหม่" },
-  { holiday_date: "2026-02-12", name: "วันมาฆบูชา" },
-  { holiday_date: "2026-04-06", name: "วันจักรี" },
-  { holiday_date: "2026-04-13", name: "วันสงกรานต์" },
-  { holiday_date: "2026-04-14", name: "วันสงกรานต์" },
-  { holiday_date: "2026-04-15", name: "วันสงกรานต์" },
-  { holiday_date: "2026-05-01", name: "วันแรงงานแห่งชาติ" },
-  { holiday_date: "2026-05-04", name: "วันฉัตรมงคล" },
-  { holiday_date: "2026-05-11", name: "วันวิสาขบูชา" },
-  { holiday_date: "2026-06-03", name: "วันเฉลิมพระชนมพรรษาสมเด็จพระราชินี" },
-  { holiday_date: "2026-07-09", name: "วันอาสาฬหบูชา" },
-  { holiday_date: "2026-07-10", name: "วันเข้าพรรษา" },
-  { holiday_date: "2026-07-28", name: "วันเฉลิมพระชนมพรรษา ร.10" },
-  { holiday_date: "2026-08-12", name: "วันแม่แห่งชาติ" },
-  { holiday_date: "2026-10-13", name: "วันนวมินทรมหาราช" },
-  { holiday_date: "2026-10-23", name: "วันปิยมหาราช" },
-  { holiday_date: "2026-12-05", name: "วันพ่อแห่งชาติ" },
-  { holiday_date: "2026-12-10", name: "วันรัฐธรรมนูญ" },
-  { holiday_date: "2026-12-31", name: "วันสิ้นปี" },
-];
+const DAY_TH = ["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัส","ศุกร์","เสาร์"];
+
+function formatDateTH(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return `${DAY_TH[d.getDay()]} ${d.getDate()} ${MONTHS_TH[d.getMonth()+1]} ${d.getFullYear()+543}`;
+}
 
 export default function SettingsPage({ role }) {
-  const [holidays,    setHolidays]    = useState([]);
-  const [loading,     setLoading]     = useState(false);
-  const [saving,      setSaving]      = useState(false);
-  const [msg,         setMsg]         = useState(null);
-
-  // form เพิ่มวันหยุดใหม่
-  const [newDate,     setNewDate]     = useState("");
-  const [newName,     setNewName]     = useState("");
-  const [newPaidTrial, setNewPaidTrial] = useState(false);
-  const [newNote,     setNewNote]     = useState("");
-
-  // filter ปี
   const now = new Date();
-  const [filterYear, setFilterYear] = useState(now.getFullYear() + 543);
+  const [holidays, setHolidays] = useState([]);
+  const [loading,  setLoading]  = useState(false);
+  const [filterYear, setFilterYear] = useState(now.getFullYear());
+
+  // ── form ──
+  const [form, setForm] = useState({
+    holiday_date: "",
+    name: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [msg,    setMsg]    = useState(null);
 
   useEffect(() => { loadHolidays(); }, [filterYear]);
 
   const loadHolidays = async () => {
     setLoading(true);
-    const yearAD = filterYear - 543;
-    const { data, error } = await supabase
+    const from = `${filterYear}-01-01`;
+    const to   = `${filterYear}-12-31`;
+    const { data } = await supabase
       .from("company_holidays")
       .select("*")
-      .gte("holiday_date", `${yearAD}-01-01`)
-      .lte("holiday_date", `${yearAD}-12-31`)
+      .gte("holiday_date", from)
+      .lte("holiday_date", to)
       .order("holiday_date");
-    if (!error) setHolidays(data || []);
+    if (data) setHolidays(data);
     setLoading(false);
   };
 
-  const handleAdd = async () => {
-    if (!newDate || !newName.trim()) {
-      setMsg({ type:"warn", text:"⚠️ กรุณากรอกวันที่และชื่อวันหยุด" });
+  const handleSave = async () => {
+    if (!form.holiday_date || !form.name.trim()) {
+      setMsg({ type: "error", text: "❌ กรุณากรอกวันที่และชื่อวันหยุด" });
+      return;
+    }
+    // ตรวจว่าเป็นวันอาทิตย์ไหม
+    const d = new Date(form.holiday_date + "T00:00:00");
+    if (d.getDay() === 0) {
+      setMsg({ type: "warn", text: "⚠️ วันอาทิตย์เป็นวันหยุดอัตโนมัติอยู่แล้ว ไม่จำเป็นต้องบันทึก" });
       return;
     }
     setSaving(true);
+    setMsg(null);
     const { error } = await supabase.from("company_holidays").insert({
-      holiday_date:      newDate,
-      name:              newName.trim(),
-      is_paid_for_trial: newPaidTrial,
-      note:              newNote.trim() || null,
-      created_by_role:   role,
+      holiday_date: form.holiday_date,
+      name: form.name.trim(),
     });
     if (error) {
-      setMsg({ type:"error", text:"❌ " + (error.code === "23505" ? "วันนี้มีอยู่แล้ว" : error.message) });
+      if (error.code === "23505") {
+        setMsg({ type: "error", text: "❌ วันนี้บันทึกไปแล้ว" });
+      } else {
+        setMsg({ type: "error", text: "❌ " + error.message });
+      }
     } else {
-      setMsg({ type:"ok", text:`✅ เพิ่ม "${newName}" สำเร็จ` });
-      setNewDate(""); setNewName(""); setNewNote(""); setNewPaidTrial(false);
+      setMsg({ type: "ok", text: "✅ บันทึกวันหยุดแล้ว" });
+      setForm({ holiday_date: "", name: "" });
       loadHolidays();
     }
     setSaving(false);
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`ลบ "${name}" เลยไหม?`)) return;
-    const { error } = await supabase.from("company_holidays").delete().eq("id", id);
-    if (error) setMsg({ type:"error", text:"❌ " + error.message });
-    else { setMsg({ type:"ok", text:`✅ ลบแล้ว` }); loadHolidays(); }
+  const handleDelete = async (row) => {
+    if (!window.confirm(`ลบวันหยุด "${row.name}" (${formatDateTH(row.holiday_date)}) ออกไหม?`)) return;
+    await supabase.from("company_holidays").delete().eq("id", row.id);
+    loadHolidays();
   };
 
-  // import preset วันหยุดราชการ
-  const handleImportPreset = async () => {
-    if (!window.confirm(`import วันหยุดราชการ 2569 จำนวน ${TH_HOLIDAYS_2569.length} วัน?\n(ซ้ำจะถูกข้าม)`)) return;
-    setSaving(true);
-    const rows = TH_HOLIDAYS_2569.map(h => ({ ...h, created_by_role: role }));
-    const { error } = await supabase.from("company_holidays")
-      .upsert(rows, { onConflict: "holiday_date", ignoreDuplicates: true });
-    if (error) setMsg({ type:"error", text:"❌ " + error.message });
-    else { setMsg({ type:"ok", text:"✅ Import วันหยุดราชการ 2569 สำเร็จ" }); loadHolidays(); }
-    setSaving(false);
-  };
-
-  // จัดกลุ่มตามเดือน
+  // group by เดือน
   const byMonth = {};
   holidays.forEach(h => {
-    const m = new Date(h.holiday_date).getMonth() + 1;
+    const m = h.holiday_date.slice(5, 7);
     if (!byMonth[m]) byMonth[m] = [];
     byMonth[m].push(h);
   });
@@ -117,158 +90,132 @@ export default function SettingsPage({ role }) {
   return (
     <div style={s.page}>
 
-      {/* ── Header ─────────────────────────────────────────── */}
+      {/* ── หัว ── */}
       <div style={s.card}>
-        <div style={{ display:"flex", justifyContent:"space-between",
-          alignItems:"center", flexWrap:"wrap", gap:10 }}>
-          <div>
-            <h2 style={{ margin:0, fontSize:18, color:"#1e3a5f" }}>🗓 จัดการวันหยุดบริษัท</h2>
-            <p style={{ margin:"4px 0 0", fontSize:13, color:"#64748b" }}>
-              วันหยุดที่บริษัทปิดเอง — พนักงานประจำได้ค่าจ้างปกติ
-            </p>
+        <h3 style={s.cardTitle}>📅 วันหยุดบริษัท</h3>
+        <p style={{ margin:"0 0 4px", fontSize:13, color:"#64748b" }}>
+          บันทึกวันหยุดพิเศษของบริษัท — ระบบจะไม่นับวันเหล่านี้เป็นวันขาดงาน
+        </p>
+        <div style={s.infoBanner}>
+          🗓 <strong>วันอาทิตย์</strong> เป็นวันหยุดอัตโนมัติ — ไม่ต้องบันทึก
+        </div>
+      </div>
+
+      {/* ── ฟอร์มเพิ่ม ── */}
+      <div style={s.card}>
+        <h3 style={s.cardTitle}>➕ เพิ่มวันหยุด</h3>
+        <div style={s.formRow}>
+          <div style={{ flex:1 }}>
+            <label style={s.label}>วันที่</label>
+            <input type="date" value={form.holiday_date}
+              onChange={e => setForm(f => ({ ...f, holiday_date: e.target.value }))}
+              style={s.input} />
           </div>
-          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-            <label style={s.lbl}>ปี (พ.ศ.)</label>
-            <input type="number" value={filterYear}
-              onChange={e=>setFilterYear(+e.target.value)}
-              style={{ ...s.input, width:80 }} min={2560} max={2580} />
-            <button onClick={handleImportPreset} disabled={saving}
-              style={{ ...s.btn, background:"#7c3aed", color:"#fff" }}>
-              📥 Import วันหยุดราชการ 2569
+          <div style={{ flex:2 }}>
+            <label style={s.label}>ชื่อวันหยุด</label>
+            <input type="text" value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="เช่น วันสงกรานต์, วันหยุดพิเศษ"
+              style={{ ...s.input, width:"100%" }}
+              onKeyDown={e => e.key === "Enter" && handleSave()} />
+          </div>
+          <div style={{ alignSelf:"flex-end" }}>
+            <button onClick={handleSave} disabled={saving}
+              style={{ ...s.btn, ...s.btnPrimary }}>
+              {saving ? "⏳" : "💾 บันทึก"}
             </button>
           </div>
         </div>
+
+        {msg && (
+          <div style={{ ...s.msgBox,
+            background: msg.type==="ok" ? "#f0fdf4" : msg.type==="warn" ? "#fffbeb" : "#fef2f2",
+            color: msg.type==="ok" ? "#166534" : msg.type==="warn" ? "#92400e" : "#991b1b",
+            border: `1px solid ${msg.type==="ok" ? "#86efac" : msg.type==="warn" ? "#fde68a" : "#fca5a5"}` }}>
+            {msg.text}
+          </div>
+        )}
       </div>
 
-      {/* ── msg ─────────────────────────────────────────────── */}
-      {msg && (
-        <div style={{ ...s.msgBox,
-          background: msg.type==="ok"?"#f0fdf4":msg.type==="warn"?"#fffbeb":"#fef2f2",
-          borderColor: msg.type==="ok"?"#86efac":msg.type==="warn"?"#fde68a":"#fca5a5",
-          color: msg.type==="ok"?"#166534":msg.type==="warn"?"#92400e":"#991b1b" }}>
-          {msg.text}
-        </div>
-      )}
-
-      {/* ── เพิ่มวันหยุดใหม่ ──────────────────────────────── */}
+      {/* ── รายการวันหยุด ── */}
       <div style={s.card}>
-        <p style={{ margin:"0 0 12px", fontWeight:700, fontSize:14 }}>➕ เพิ่มวันหยุด</p>
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
-          <div>
-            <label style={s.lbl}>วันที่</label>
-            <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
-              style={s.input} />
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <h3 style={{ ...s.cardTitle, margin:0 }}>
+            วันหยุดปี พ.ศ. {filterYear + 543}
+          </h3>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            <button onClick={() => setFilterYear(y => y-1)} style={s.yearBtn}>◀</button>
+            <span style={{ fontWeight:700, minWidth:60, textAlign:"center" }}>{filterYear + 543}</span>
+            <button onClick={() => setFilterYear(y => y+1)} style={s.yearBtn}>▶</button>
+            <button onClick={loadHolidays} style={s.refreshBtn}>🔄</button>
           </div>
-          <div>
-            <label style={s.lbl}>ชื่อวันหยุด</label>
-            <input type="text" value={newName} onChange={e=>setNewName(e.target.value)}
-              placeholder="เช่น วันหยุดพิเศษบริษัท"
-              style={{ ...s.input, width:220 }} />
-          </div>
-          <div>
-            <label style={s.lbl}>หมายเหตุ</label>
-            <input type="text" value={newNote} onChange={e=>setNewNote(e.target.value)}
-              placeholder="ไม่บังคับ"
-              style={{ ...s.input, width:160 }} />
-          </div>
-          <div style={{ display:"flex", alignItems:"center", gap:6, paddingBottom:2 }}>
-            <input type="checkbox" id="paidTrial" checked={newPaidTrial}
-              onChange={e=>setNewPaidTrial(e.target.checked)} style={{ width:16, height:16 }} />
-            <label htmlFor="paidTrial" style={{ fontSize:13, color:"#374151", cursor:"pointer" }}>
-              ทดลองงานได้เงินด้วย
-            </label>
-          </div>
-          <button onClick={handleAdd} disabled={saving || !newDate || !newName}
-            style={{ ...s.btn, ...s.btnPrimary,
-              opacity: (!newDate || !newName) ? 0.5 : 1 }}>
-            {saving ? "⏳" : "➕ เพิ่ม"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── รายการวันหยุด ───────────────────────────────────── */}
-      <div style={s.card}>
-        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
-          <p style={{ margin:0, fontWeight:700, fontSize:14 }}>
-            📋 วันหยุดปี {filterYear} ({holidays.length} วัน)
-          </p>
-          <button onClick={loadHolidays} style={{ ...s.btn, ...s.btnGray }}>🔄</button>
         </div>
 
-        {loading && <p style={{ color:"#9ca3af" }}>กำลังโหลด...</p>}
+        {loading && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
 
         {!loading && holidays.length === 0 && (
           <p style={{ color:"#9ca3af", textAlign:"center", padding:24 }}>
-            ยังไม่มีวันหยุด — เพิ่มเองหรือกด "Import วันหยุดราชการ"
+            ยังไม่มีวันหยุดที่บันทึกในปีนี้
           </p>
         )}
 
-        {Object.keys(byMonth).sort((a,b)=>+a-+b).map(m => (
-          <div key={m} style={{ marginBottom:16 }}>
-            <p style={{ margin:"0 0 6px", fontSize:13, fontWeight:700,
-              color:"#1e3a5f", borderBottom:"2px solid #e2e8f0", paddingBottom:4 }}>
-              {MONTHS_TH[+m]}
-            </p>
+        {Object.keys(byMonth).sort().map(m => (
+          <div key={m} style={{ marginBottom:12 }}>
+            <div style={s.monthHeader}>
+              {MONTHS_TH[parseInt(m)]} {filterYear + 543}
+              <span style={s.countBadge}>{byMonth[m].length} วัน</span>
+            </div>
             {byMonth[m].map(h => (
               <div key={h.id} style={s.holidayRow}>
-                <div style={{ display:"flex", alignItems:"center", gap:12, flex:1 }}>
-                  <span style={s.dateChip}>
-                    {new Date(h.holiday_date).toLocaleDateString("th-TH",
-                      { day:"numeric", month:"short", year:"numeric", calendar:"buddhist" })}
-                  </span>
-                  <span style={{ fontWeight:600, fontSize:14 }}>{h.name}</span>
-                  {h.is_paid_for_trial && (
-                    <span style={s.trialBadge}>ทดลองงานได้ด้วย</span>
-                  )}
-                  {h.note && (
-                    <span style={{ fontSize:12, color:"#94a3b8" }}>{h.note}</span>
-                  )}
+                <div style={{ flex:1 }}>
+                  <span style={s.dateTH}>{formatDateTH(h.holiday_date)}</span>
+                  <span style={s.holidayName}>{h.name}</span>
                 </div>
-                <button onClick={()=>handleDelete(h.id, h.name)} style={s.deleteBtn}>🗑</button>
+                <button onClick={() => handleDelete(h)} style={s.deleteBtn}>🗑</button>
               </div>
             ))}
           </div>
         ))}
-      </div>
 
-      {/* ── คำอธิบายการทำงาน ────────────────────────────────── */}
-      <div style={{ ...s.card, background:"#f0f9ff", border:"1px solid #bae6fd" }}>
-        <p style={{ margin:"0 0 8px", fontWeight:700, fontSize:14, color:"#0369a1" }}>
-          ℹ️ วันหยุดบริษัทกระทบการคำนวณเงินเดือนอย่างไร?
-        </p>
-        <div style={{ fontSize:13, color:"#0c4a6e", lineHeight:1.8 }}>
-          <p style={{ margin:"0 0 4px" }}>• <b>พนักงานประจำ</b> — ได้ค่าจ้างปกติ (บวก holiday_wage เข้าไป ไม่หัก work_days)</p>
-          <p style={{ margin:"0 0 4px" }}>• <b>พนักงานทดลองงาน</b> — ไม่ได้ค่าจ้าง (ยกเว้นติ๊ก "ทดลองงานได้ด้วย")</p>
-          <p style={{ margin:0 }}>• ระบบจะดึงวันหยุดในตารางนี้ไปใช้ตอนกด "คำนวณเงินเดือน" ในแท็บ 💰 เงินเดือน</p>
-        </div>
+        {holidays.length > 0 && (
+          <div style={s.totalRow}>
+            รวมทั้งปี <strong>{holidays.length} วันหยุด</strong>
+            {" "}(ไม่นับวันอาทิตย์)
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────
 const s = {
-  page: { maxWidth:900, margin:"0 auto" },
-  card: { background:"#fff", borderRadius:12, padding:16,
-    boxShadow:"0 1px 4px rgba(0,0,0,0.08)", marginBottom:12 },
-  lbl: { display:"block", fontSize:12, color:"#64748b",
-    fontWeight:600, marginBottom:4 },
-  input: { padding:"7px 10px", border:"1.5px solid #e2e8f0",
-    borderRadius:8, fontSize:14, display:"block" },
-  btn: { padding:"8px 16px", borderRadius:8, border:"none",
-    fontWeight:600, fontSize:13, cursor:"pointer" },
-  btnPrimary: { background:"#2563eb", color:"#fff" },
-  btnGray:    { background:"#f1f5f9", color:"#374151", border:"1px solid #e2e8f0" },
-  msgBox: { padding:"10px 14px", borderRadius:8, border:"1px solid",
-    marginBottom:12, fontWeight:600, fontSize:14 },
-  holidayRow: { display:"flex", alignItems:"center", justifyContent:"space-between",
-    padding:"8px 10px", borderRadius:8, marginBottom:4,
-    background:"#f8fafc", border:"1px solid #f1f5f9" },
-  dateChip: { background:"#dbeafe", color:"#1e40af", borderRadius:6,
-    padding:"2px 10px", fontSize:12, fontWeight:700, whiteSpace:"nowrap" },
-  trialBadge: { background:"#dcfce7", color:"#166534", borderRadius:4,
-    padding:"1px 8px", fontSize:11, fontWeight:600 },
-  deleteBtn: { background:"#fef2f2", border:"1px solid #fecaca",
-    color:"#dc2626", borderRadius:8, padding:"5px 10px",
-    cursor:"pointer", fontSize:14, flexShrink:0 },
+  page: { maxWidth:760, margin:"0 auto", display:"flex", flexDirection:"column", gap:16 },
+  card: { background:"#fff", borderRadius:12, padding:16, boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
+  cardTitle: { margin:"0 0 12px", fontSize:15, fontWeight:700, color:"#1e3a5f" },
+  infoBanner: { background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:8,
+    padding:"8px 12px", fontSize:13, color:"#1e40af", marginTop:8 },
+  formRow: { display:"flex", gap:12, alignItems:"flex-start", flexWrap:"wrap" },
+  label: { display:"block", fontSize:12, color:"#64748b", fontWeight:600, marginBottom:4 },
+  input: { padding:"8px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14 },
+  btn: { padding:"9px 18px", borderRadius:8, border:"1px solid #e2e8f0",
+    background:"#f8fafc", cursor:"pointer", fontWeight:600, fontSize:14 },
+  btnPrimary: { background:"#2563eb", color:"#fff", border:"none" },
+  msgBox: { padding:"8px 12px", borderRadius:8, fontWeight:600, fontSize:13, marginTop:10 },
+  monthHeader: { display:"flex", alignItems:"center", gap:8, padding:"6px 10px",
+    background:"#f8fafc", borderRadius:8, marginBottom:4,
+    fontWeight:700, fontSize:13, color:"#1e3a5f" },
+  countBadge: { background:"#dbeafe", color:"#1d4ed8", padding:"1px 8px",
+    borderRadius:12, fontSize:11, fontWeight:600 },
+  holidayRow: { display:"flex", alignItems:"center", padding:"8px 10px",
+    borderBottom:"1px solid #f8fafc" },
+  dateTH: { fontSize:13, color:"#64748b", marginRight:12, minWidth:160, display:"inline-block" },
+  holidayName: { fontWeight:600, fontSize:14 },
+  deleteBtn: { padding:"4px 8px", borderRadius:6, border:"1px solid #fecaca",
+    background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:13 },
+  yearBtn: { padding:"4px 10px", borderRadius:6, border:"1px solid #e2e8f0",
+    background:"#f8fafc", cursor:"pointer", fontWeight:700 },
+  refreshBtn: { padding:"4px 10px", borderRadius:6, border:"1px solid #e2e8f0",
+    background:"#f8fafc", cursor:"pointer" },
+  totalRow: { textAlign:"right", fontSize:13, color:"#64748b", marginTop:8, paddingTop:8,
+    borderTop:"1px solid #e2e8f0" },
 };

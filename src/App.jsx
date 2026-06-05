@@ -3,16 +3,16 @@ import { useState } from "react";
 import LoginPage from "./LoginPage";
 import AttendancePage from "./AttendancePage";
 import EmployeesPage from "./EmployeesPage";
-import WeeklySummaryPage from "./WeeklySummaryPage";
+import DeductionsPage from "./DeductionsPage";
 import PayrollPage from "./PayrollPage";
 import SettingsPage from "./SettingsPage";
 
 const TABS = [
-  { id: "attendance", label: "⏱ บันทึกเวลา" },
-  { id: "employees",  label: "👥 พนักงาน" },
-  { id: "weekly",     label: "📅 รายอาทิตย์" },
-  { id: "payroll",    label: "💰 เงินเดือน" },
-  { id: "settings",   label: "⚙️ ตั้งค่า" },
+  { id: "attendance",  label: "⏱ บันทึกเวลา" },
+  { id: "employees",   label: "👥 พนักงาน" },
+  { id: "deductions",  label: "📋 รายจ่ายพนักงาน" },
+  { id: "payroll",     label: "💰 เงินเดือน" },
+  { id: "settings",    label: "📅 วันหยุด" },
 ];
 
 export default function App() {
@@ -30,7 +30,6 @@ export default function App() {
         </div>
         <button onClick={() => setRole(null)} style={styles.logoutBtn}>🔒 ออก</button>
       </header>
-
       <nav style={styles.tabBar}>
         {TABS.map((t) => (
           <button key={t.id} onClick={() => setActiveTab(t.id)}
@@ -39,13 +38,12 @@ export default function App() {
           </button>
         ))}
       </nav>
-
       <main style={styles.main}>
-        {activeTab === "attendance" && <AttendancePage role={role} />}
-        {activeTab === "employees"  && <EmployeesPage role={role} />}
-        {activeTab === "weekly"     && <WeeklySummaryPage role={role} />}
-        {activeTab === "payroll"    && <PayrollPage role={role} />}
-        {activeTab === "settings"   && <SettingsPage role={role} />}
+        {activeTab === "attendance"  && <AttendancePage role={role} />}
+        {activeTab === "employees"   && <EmployeesPage role={role} />}
+        {activeTab === "deductions"  && <DeductionsPage role={role} />}
+        {activeTab === "payroll"     && <PayrollPage role={role} />}
+        {activeTab === "settings"    && <SettingsPage role={role} />}
       </main>
     </div>
   );
