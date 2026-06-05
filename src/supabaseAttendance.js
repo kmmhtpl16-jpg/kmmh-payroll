@@ -1,46 +1,6 @@
 // src/supabaseAttendance.js
-// ─────────────────────────────────────────────────────────────
-// ฟังก์ชันสำหรับบันทึกข้อมูลบันทึกเวลาลง Supabase
-//
-// Flow:
-//   1. INSERT attendance_imports (1 row = 1 ไฟล์ CSV)
-//   2. UPSERT attendance_logs (หลาย rows = รายวันรายคน)
-//   3. อัพเดต total_rows / has_errors กลับที่ imports
-//
-// Export:
-//   saveAttendanceToSupabase(parsedRows, fileName, dateFrom, dateTo)
-//   loadAttendanceByDate(date)        ← ดึง log รายวัน
-//   loadRecentImports(limit)          ← ดึงคลังไฟล์
-//   deleteImport(importId)            ← ลบทั้ง batch + cascade logs
-// ─────────────────────────────────────────────────────────────
-
 import { supabase } from "./supabaseClient";
 
-// ─────────────────────────────────────────────────────────────
-// saveAttendanceToSupabase
-//
-// @param rows        - array จาก attendanceLogic.js (หลัง calculate)
-//   รูปแบบแต่ละ row:
-//   {
-//     employee_id   : uuid (ผูกแล้ว),
-//     work_date     : 'YYYY-MM-DD',
-//     scan_am_in    : 'HH:mm' | null,
-//     scan_am_out   : 'HH:mm' | null,
-//     scan_pm_in    : 'HH:mm' | null,
-//     scan_pm_out   : 'HH:mm' | null,
-//     late_minutes  : number,
-//     ot_hours      : number,
-//     lunch_ot      : boolean,
-//     needs_hr_review : boolean,
-//     hr_note       : string | null,
-//   }
-// @param fileName    - ชื่อไฟล์ CSV ต้นฉบับ
-// @param dateFrom    - 'YYYY-MM-DD' วันแรกในไฟล์
-// @param dateTo      - 'YYYY-MM-DD' วันสุดท้ายในไฟล์
-// @param role        - 'hr' | 'owner' (สำหรับ uploaded_by_role)
-//
-// @returns { importId, saved, errors }
-// ─────────────────────────────────────────────────────────────
 export async function saveAttendanceToSupabase(
   rows,
   fileName,
@@ -61,7 +21,6 @@ export async function saveAttendanceToSupabase(
       date_to: dateTo,
       total_rows: rows.length,
       has_errors: rows.some((r) => r.needs_hr_review),
-      uploaded_by_role: role,
     })
     .select("id")
     .single();
@@ -73,8 +32,6 @@ export async function saveAttendanceToSupabase(
   const importId = importData.id;
 
   // ── Step 2: UPSERT attendance_logs ────────────────────────
-  // ใช้ upsert เพราะถ้า import ซ้ำวันเดิม → อัพเดตข้อมูล
-  // (UNIQUE constraint: employee_id + work_date)
   const logsToUpsert = rows.map((r) => ({
     import_id:        importId,
     employee_id:      r.employee_id,
@@ -96,12 +53,11 @@ export async function saveAttendanceToSupabase(
     .from("attendance_logs")
     .upsert(logsToUpsert, {
       onConflict: "employee_id,work_date",
-      ignoreDuplicates: false, // อัพเดตถ้าซ้ำ
+      ignoreDuplicates: false,
     })
     .select("id");
 
   if (logErr) {
-    // พยายาม rollback import record
     await supabase.from("attendance_imports").delete().eq("id", importId);
     throw new Error(`บันทึก logs ไม่สำเร็จ: ${logErr.message}`);
   }
@@ -117,16 +73,10 @@ export async function saveAttendanceToSupabase(
   };
 }
 
-// ─────────────────────────────────────────────────────────────
-// loadAttendanceByDate — ดึง log รายวันพร้อมชื่อพนักงาน
-// ─────────────────────────────────────────────────────────────
 export async function loadAttendanceByDate(date) {
   const { data, error } = await supabase
     .from("attendance_logs")
-    .select(`
-      *,
-      employees ( emp_code, nickname, full_name )
-    `)
+    .select(`*, employees ( emp_code, nickname, full_name )`)
     .eq("work_date", date)
     .order("employees(emp_code)");
 
@@ -134,9 +84,6 @@ export async function loadAttendanceByDate(date) {
   return data || [];
 }
 
-// ─────────────────────────────────────────────────────────────
-// loadRecentImports — คลังไฟล์ที่อัพโหลด
-// ─────────────────────────────────────────────────────────────
 export async function loadRecentImports(limit = 20) {
   const { data, error } = await supabase
     .from("attendance_imports")
@@ -148,9 +95,6 @@ export async function loadRecentImports(limit = 20) {
   return data || [];
 }
 
-// ─────────────────────────────────────────────────────────────
-// deleteImport — ลบทั้ง batch (cascade → ลบ logs ด้วย)
-// ─────────────────────────────────────────────────────────────
 export async function deleteImport(importId) {
   const { error } = await supabase
     .from("attendance_imports")
@@ -161,9 +105,6 @@ export async function deleteImport(importId) {
   return true;
 }
 
-// ─────────────────────────────────────────────────────────────
-// confirmLog — HR ยืนยัน log ที่ needs_hr_review = true
-// ─────────────────────────────────────────────────────────────
 export async function confirmLog(logId, hrNote) {
   const { error } = await supabase
     .from("attendance_logs")
