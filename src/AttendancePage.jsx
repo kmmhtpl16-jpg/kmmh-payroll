@@ -101,11 +101,13 @@ export default function AttendancePage({ role }) {
   const openEdit = (log) => {
     setEditRow(log);
     setEditValues({
-      scan_am_in:  log.scan_am_in  || "",
-      scan_am_out: log.scan_am_out || "",
-      scan_pm_in:  log.scan_pm_in  || "",
-      scan_pm_out: log.scan_pm_out || "",
-      hr_note:     log.hr_note     || "",
+      scan_am_in:       log.scan_am_in       || "",
+      scan_am_out:      log.scan_am_out      || "",
+      scan_pm_in:       log.scan_pm_in       || "",
+      scan_pm_out:      log.scan_pm_out      || "",
+      hr_note:          log.hr_note          || "",
+      hr_extra_deduct:  log.hr_extra_deduct  != null ? String(log.hr_extra_deduct) : "",
+      hr_extra_note:    log.hr_extra_note    || "",
     });
     setEditMsg(null);
   };
@@ -140,8 +142,10 @@ export default function AttendancePage({ role }) {
         scan_pm_out:     pm_out || null,
         late_minutes:    lateMin,
         ot_hours:        otHours,
-        hr_note:         editValues.hr_note || null,
-        needs_hr_review: allFilled ? false : true,
+        hr_note:          editValues.hr_note || null,
+        hr_extra_deduct:  parseFloat(editValues.hr_extra_deduct) || 0,
+        hr_extra_note:    editValues.hr_extra_note || null,
+        needs_hr_review:  allFilled ? false : true,
         is_confirmed:    allFilled ? true  : false,
         updated_at:      new Date().toISOString(),
       })
@@ -434,6 +438,42 @@ export default function AttendancePage({ role }) {
                   placeholder="หรือพิมพ์เองได้"
                   style={{ width:"100%", padding:"8px 10px", border:"1.5px solid #e2e8f0",
                     borderRadius:8, fontSize:14, boxSizing:"border-box" }} />
+              </div>
+
+              {/* ── ช่องหักเพิ่ม (ออกระหว่างวัน / ลารายชั่วโมง) ── */}
+              <div style={{ marginBottom:12, padding:"10px 12px",
+                background:"#fafafa", borderRadius:8, border:"1px solid #e2e8f0" }}>
+                <label style={{ display:"block", fontSize:12, color:"#64748b",
+                  fontWeight:600, marginBottom:2 }}>💸 หักเพิ่ม (บาท)</label>
+                <p style={{ margin:"0 0 8px", fontSize:11, color:"#92400e",
+                  background:"#fffbeb", padding:"4px 8px", borderRadius:6,
+                  border:"1px solid #fde68a" }}>
+                  ⚠️ ใช้เฉพาะ <strong>ออกระหว่างวัน</strong> เท่านั้น —
+                  ถ้าเข้าสาย/ออกก่อน/พักนาน ระบบหักให้อัตโนมัติแล้ว ไม่ต้องกรอกซ้ำ
+                </p>
+                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                  <input
+                    type="text" inputMode="decimal"
+                    placeholder="0.00"
+                    value={editValues.hr_extra_deduct}
+                    onChange={e => {
+                      const v = e.target.value.replace(/[^0-9.]/g,"");
+                      setEditValues(p => ({ ...p, hr_extra_deduct: v }));
+                    }}
+                    style={{ width:100, padding:"8px 10px", border:"1.5px solid #e2e8f0",
+                      borderRadius:8, fontSize:16, textAlign:"right",
+                      fontWeight:700, boxSizing:"border-box" }}
+                  />
+                  <span style={{ fontSize:13, color:"#64748b" }}>บาท</span>
+                  <input
+                    type="text"
+                    placeholder="เหตุผล เช่น ออกระหว่างวัน 55 นาที"
+                    value={editValues.hr_extra_note}
+                    onChange={e => setEditValues(p => ({ ...p, hr_extra_note: e.target.value }))}
+                    style={{ flex:1, padding:"8px 10px", border:"1.5px solid #e2e8f0",
+                      borderRadius:8, fontSize:13, boxSizing:"border-box" }}
+                  />
+                </div>
               </div>
 
               {editMsg && (
