@@ -4,11 +4,6 @@ import { parseZKTecoCSV, calcDay } from "./attendanceLogic";
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 
-const STATUS_COLOR = {
-  ok:     { bg: "#f0fdf4", text: "#166534" },
-  review: { bg: "#fffbeb", text: "#92400e" },
-};
-
 function processAttendance(rows, employees) {
   return rows.map((r) => {
     const emp = employees.find((e) => e.emp_code === r.empCode);
@@ -34,6 +29,20 @@ function processAttendance(rows, employees) {
   });
 }
 
+// ✅ แปลง "HH:mm" ให้แน่ใจว่าเป็น 24 ชม. เสมอ
+function to24h(val) {
+  if (!val) return "";
+  // ถ้าเป็น HH:mm อยู่แล้ว (ไม่มี AM/PM) ส่งคืนเลย
+  if (/^\d{2}:\d{2}$/.test(val)) return val;
+  // แปลง 12h → 24h
+  const [time, period] = val.split(" ");
+  if (!period) return val;
+  let [h, m] = time.split(":").map(Number);
+  if (period.toUpperCase() === "PM" && h !== 12) h += 12;
+  if (period.toUpperCase() === "AM" && h === 12) h = 0;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
 export default function AttendancePage({ role }) {
   const [processed,      setProcessed]      = useState([]);
   const [employees,      setEmployees]      = useState([]);
@@ -44,18 +53,14 @@ export default function AttendancePage({ role }) {
   const [loadingImports, setLoadingImports] = useState(false);
   const [activeSection,  setActiveSection]  = useState("upload");
 
-  // ── state สำหรับ edit mode ─────────────────────────────
-  const [reviewLogs,   setReviewLogs]   = useState([]);
+  const [reviewLogs,    setReviewLogs]    = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
-  const [editRow,      setEditRow]      = useState(null);
-  const [editValues,   setEditValues]   = useState({});
-  const [savingEdit,   setSavingEdit]   = useState(false);
-  const [editMsg,      setEditMsg]      = useState(null);
+  const [editRow,       setEditRow]       = useState(null);
+  const [editValues,    setEditValues]    = useState({});
+  const [savingEdit,    setSavingEdit]    = useState(false);
+  const [editMsg,       setEditMsg]       = useState(null);
 
-  useEffect(() => {
-    loadEmployees();
-    loadHistory();
-  }, []);
+  useEffect(() => { loadEmployees(); loadHistory(); }, []);
 
   const loadEmployees = async () => {
     const { data } = await supabase
@@ -101,31 +106,36 @@ export default function AttendancePage({ role }) {
     setSavingEdit(true);
     setEditMsg(null);
 
+    // ✅ แปลงเป็น 24h ก่อนส่ง
+    const am_in  = to24h(editValues.scan_am_in);
+    const am_out = to24h(editValues.scan_am_out);
+    const pm_in  = to24h(editValues.scan_pm_in);
+    const pm_out = to24h(editValues.scan_pm_out);
+
     const emp = employees.find(e => e.id === editRow.employee_id);
     const { lateMin, otHours } = calcDay({
-      checkIn:  editValues.scan_am_in  || null,
-      lunchOut: editValues.scan_am_out || null,
-      lunchIn:  editValues.scan_pm_in  || null,
-      checkOut: editValues.scan_pm_out || null,
+      checkIn:  am_in  || null,
+      lunchOut: am_out || null,
+      lunchIn:  pm_in  || null,
+      checkOut: pm_out || null,
       empCode:  emp?.emp_code || "",
     });
 
-    // ✅ แก้: !! บังคับให้เป็น boolean จริงๆ ไม่ใช่ string
-    const allFilled = !!(editValues.scan_am_in && editValues.scan_am_out
-      && editValues.scan_pm_in && editValues.scan_pm_out);
+    // ✅ บังคับ boolean ด้วย === true
+    const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
 
     const { error } = await supabase
       .from("attendance_logs")
       .update({
-        scan_am_in:      editValues.scan_am_in  || null,
-        scan_am_out:     editValues.scan_am_out || null,
-        scan_pm_in:      editValues.scan_pm_in  || null,
-        scan_pm_out:     editValues.scan_pm_out || null,
+        scan_am_in:      am_in  || null,
+        scan_am_out:     am_out || null,
+        scan_pm_in:      pm_in  || null,
+        scan_pm_out:     pm_out || null,
         late_minutes:    lateMin,
         ot_hours:        otHours,
         hr_note:         editValues.hr_note || null,
-        needs_hr_review: !allFilled,
-        is_confirmed:    allFilled,
+        needs_hr_review: allFilled ? false : true,
+        is_confirmed:    allFilled ? true  : false,
         updated_at:      new Date().toISOString(),
       })
       .eq("id", editRow.id);
@@ -183,7 +193,7 @@ export default function AttendancePage({ role }) {
 
   const SECTIONS = [
     { id: "upload",  label: "📤 อัพโหลด CSV" },
-    { id: "review",  label: `🟡 แก้ไขย้อนหลัง` },
+    { id: "review",  label: "🟡 แก้ไขย้อนหลัง" },
     { id: "history", label: "📁 คลังไฟล์" },
   ];
 
@@ -199,6 +209,7 @@ export default function AttendancePage({ role }) {
         ))}
       </div>
 
+      {/* ══ UPLOAD ══ */}
       {activeSection === "upload" && (
         <div style={s.section}>
           <label style={s.uploadZone}>
@@ -224,11 +235,6 @@ export default function AttendancePage({ role }) {
               <p style={{ margin:0, fontWeight:600, color: saveResult.success?"#166534":"#991b1b" }}>
                 {saveResult.success ? "✅ " : "❌ "}{saveResult.message}
               </p>
-              {saveResult.success && reviewCount > 0 && (
-                <p style={{ margin:"4px 0 0", fontSize:12, color:"#92400e" }}>
-                  💡 แก้ไขรายการ 🟡 ได้ที่แท็บ "แก้ไขย้อนหลัง"
-                </p>
-              )}
             </div>
           )}
 
@@ -254,8 +260,7 @@ export default function AttendancePage({ role }) {
                           {r.late_minutes||0}
                         </td>
                         <td style={s.td}>{r.ot_hours||0}</td>
-                        <td style={{ ...s.td, fontWeight:600,
-                          color: r.needs_hr_review?"#92400e":"#166534" }}>
+                        <td style={{ ...s.td, fontWeight:600, color: r.needs_hr_review?"#92400e":"#166534" }}>
                           {r.needs_hr_review ? `🟡 ${r.hr_note||"ตรวจ"}` : "🟢"}
                         </td>
                       </tr>
@@ -272,6 +277,7 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
+      {/* ══ REVIEW ══ */}
       {activeSection === "review" && (
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -285,23 +291,16 @@ export default function AttendancePage({ role }) {
           </div>
 
           {loadingReview && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
-
           {!loadingReview && reviewLogs.length === 0 && (
-            <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>
-              🎉 ไม่มีรายการที่ต้องตรวจแล้ว
-            </p>
+            <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>🎉 ไม่มีรายการที่ต้องตรวจแล้ว</p>
           )}
 
           {reviewLogs.map(log => (
             <div key={log.id} style={s.reviewCard}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                 <div>
-                  <span style={{ fontWeight:700, fontSize:14 }}>
-                    {log.employees?.nickname || log.employee_id}
-                  </span>
-                  <span style={{ marginLeft:10, color:"#64748b", fontSize:13 }}>
-                    {log.work_date}
-                  </span>
+                  <span style={{ fontWeight:700, fontSize:14 }}>{log.employees?.nickname || log.employee_id}</span>
+                  <span style={{ marginLeft:10, color:"#64748b", fontSize:13 }}>{log.work_date}</span>
                   {log.hr_note && (
                     <span style={{ marginLeft:8, fontSize:12, color:"#92400e",
                       background:"#fffbeb", padding:"1px 8px", borderRadius:4 }}>
@@ -326,6 +325,7 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
+      {/* ══ HISTORY ══ */}
       {activeSection === "history" && (
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -359,6 +359,7 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
+      {/* ══ MODAL แก้ไข ══ */}
       {editRow && (
         <div style={s.modalOverlay} onClick={() => setEditRow(null)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
@@ -383,11 +384,26 @@ export default function AttendancePage({ role }) {
                   <div key={key}>
                     <label style={{ display:"block", fontSize:12, color:"#64748b",
                       fontWeight:600, marginBottom:4 }}>{label}</label>
-                    <input type="time" value={editValues[key]}
-                      onChange={e => setEditValues(p => ({ ...p, [key]: e.target.value }))}
-                      style={{ width:"100%", padding:"8px 10px",
-                        border:`2px solid ${editValues[key]?"#86efac":"#fca5a5"}`,
-                        borderRadius:8, fontSize:15 }} />
+                    {/* ✅ เปลี่ยนเป็น text + pattern บังคับ HH:mm 24ชม. ทำงานได้ทุก OS */}
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="เช่น 08:00"
+                      value={editValues[key]}
+                      onChange={e => {
+                        let v = e.target.value.replace(/[^0-9:]/g,"");
+                        // auto-insert colon
+                        if (v.length === 2 && !v.includes(":")) v = v + ":";
+                        if (v.length > 5) v = v.slice(0,5);
+                        setEditValues(p => ({ ...p, [key]: v }));
+                      }}
+                      style={{
+                        width:"100%", padding:"10px", boxSizing:"border-box",
+                        border:`2px solid ${editValues[key]?.length===5?"#86efac":"#fca5a5"}`,
+                        borderRadius:8, fontSize:18, textAlign:"center",
+                        letterSpacing:2, fontWeight:700,
+                      }}
+                    />
                   </div>
                 ))}
               </div>
@@ -439,11 +455,9 @@ const s = {
   secTab: { padding:"8px 18px", borderRadius:8, border:"1.5px solid #e2e8f0",
     background:"#fff", cursor:"pointer", fontWeight:600, fontSize:14, color:"#64748b" },
   secTabActive: { background:"#2563eb", color:"#fff", borderColor:"#2563eb" },
-  section: { background:"#fff", borderRadius:12, padding:16,
-    boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
-  uploadZone: { display:"flex", alignItems:"center", gap:12,
-    border:"2px dashed #93c5fd", borderRadius:12,
-    padding:"20px 16px", cursor:"pointer", background:"#eff6ff", marginBottom:12 },
+  section: { background:"#fff", borderRadius:12, padding:16, boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
+  uploadZone: { display:"flex", alignItems:"center", gap:12, border:"2px dashed #93c5fd",
+    borderRadius:12, padding:"20px 16px", cursor:"pointer", background:"#eff6ff", marginBottom:12 },
   summaryBar: { display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 },
   badge: { padding:"4px 12px", borderRadius:20, fontSize:13, fontWeight:600 },
   resultBox: { padding:12, borderRadius:8, marginBottom:12 },
@@ -469,6 +483,5 @@ const s = {
     boxShadow:"0 20px 60px rgba(0,0,0,0.3)" },
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
     padding:"14px 16px", background:"#1e3a5f", borderRadius:"16px 16px 0 0" },
-  closeBtn: { background:"none", border:"none", color:"#fff",
-    fontSize:20, cursor:"pointer", lineHeight:1 },
+  closeBtn: { background:"none", border:"none", color:"#fff", fontSize:20, cursor:"pointer", lineHeight:1 },
 };
