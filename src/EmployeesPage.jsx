@@ -21,7 +21,7 @@ const EMPTY_FORM = {
   app_fee_status: 'held', trial_start_date: '', permanent_start_date: '',
 }
 
-export default function EmployeesPage() { {
+export default function EmployeesPage() {
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
