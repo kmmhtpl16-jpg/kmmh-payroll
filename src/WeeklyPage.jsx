@@ -33,14 +33,16 @@ export default function WeeklyPage({ role }) {
   const year  = now.getFullYear();
   const month = now.getMonth() + 1;
 
-  const [cycles,      setCycles]      = useState([]);
-  const [payrolls,    setPayrolls]    = useState([]); // payroll_records เดือนนี้
-  const [advances,    setAdvances]    = useState([]); // advance_requests
-  const [cycleLogs,   setCycleLogs]   = useState({}); // { cycle_id: { emp_id: days } }
-  const [loading,     setLoading]     = useState(true);
-  const [marking,     setMarking]     = useState(null);
-  const [detail,      setDetail]      = useState(null); // { record, cycleWage, advance }
-  const [msg,         setMsg]         = useState(null);
+  const [cycles,        setCycles]        = useState([]);
+  const [payrolls,      setPayrolls]      = useState([]); // payroll_records เดือนนี้
+  const [advances,      setAdvances]      = useState([]); // advance_requests
+  const [cycleLogs,     setCycleLogs]     = useState({}); // { cycle_id: { emp_id: days } }
+  const [period,        setPeriod]        = useState(null); // pay_periods record
+  const [loading,       setLoading]       = useState(true);
+  const [marking,       setMarking]       = useState(null);
+  const [markingMonthEnd, setMarkingMonthEnd] = useState(false);
+  const [detail,        setDetail]        = useState(null); // { record, cycleWage, advance }
+  const [msg,           setMsg]           = useState(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -61,6 +63,7 @@ export default function WeeklyPage({ role }) {
         setLoading(false);
         return;
       }
+      setPeriod(period);
 
       // 2. pay_cycles
       const { data: cyc } = await supabase
@@ -135,6 +138,24 @@ export default function WeeklyPage({ role }) {
     setMarking(null);
   };
 
+  // Mark จ่ายสิ้นเดือนแล้ว
+  const markMonthEndPaid = async () => {
+    if (!period) return;
+    if (!window.confirm("Mark จ่ายสิ้นเดือนแล้วไหม? (อาทิตย์ + OT หักปกส.+ประกันงาน)")) return;
+    setMarkingMonthEnd(true);
+    const { error } = await supabase
+      .from("pay_periods")
+      .update({ is_month_end_paid: true, month_end_paid_at: new Date().toISOString() })
+      .eq("id", period.id);
+    if (error) {
+      setMsg({ type: "error", text: "❌ " + error.message });
+    } else {
+      setPeriod(prev => ({ ...prev, is_month_end_paid: true, month_end_paid_at: new Date().toISOString() }));
+      setMsg({ type: "ok", text: "✅ Mark จ่ายสิ้นเดือนแล้ว" });
+    }
+    setMarkingMonthEnd(false);
+  };
+
   // คำนวณยอดจ่ายรอบนี้รายคน
   function getCycleRows(cycle) {
     const logMap = cycleLogs[cycle.id] || {};
@@ -152,7 +173,7 @@ export default function WeeklyPage({ role }) {
   return (
     <div style={s.page}>
       <div style={s.header}>
-        <h2 style={s.title}>📅 รายอาทิตย์</h2>
+        <h2 style={s.title}>� รายจ่ายบริษัท</h2>
         <button onClick={loadAll} style={s.refreshBtn}>🔄 โหลดใหม่</button>
       </div>
 
@@ -274,6 +295,115 @@ export default function WeeklyPage({ role }) {
           </div>
         );
       })}
+
+      {/* ══ Section สิ้นเดือน ══ */}
+      {payrolls.length > 0 && (
+        <div style={{ ...s.cycleCard,
+          opacity: period?.is_month_end_paid ? 0.75 : 1,
+          border: "2px solid #7c3aed" }}>
+
+          <div style={{ ...s.cycleHeader, background:"#4c1d95" }}>
+            <div>
+              <span style={s.cycleLabel}>💜 สิ้นเดือน</span>
+              <span style={s.cycleDates}>ค่าแรงวันอาทิตย์ + OT ทั้งเดือน</span>
+            </div>
+            {period?.is_month_end_paid
+              ? <span style={s.paidBadge}>✅ จ่ายแล้ว</span>
+              : <span style={s.pendingBadge}>⏳ ยังไม่จ่าย</span>
+            }
+          </div>
+
+          <div style={{ overflowX:"auto" }}>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  {["ชื่อ","ประเภท","อาทิตย์(วัน)","ค่าอาทิตย์","OT(ชม.)","ค่า OT","ปกส.","ประกันงาน","จ่ายสิ้นเดือน",""].map(h => (
+                    <th key={h} style={s.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {payrolls.map(r => {
+                  const monthEndPay = Math.max(0,
+                    (r.holiday_wage || 0) + (r.ot_amount || 0)
+                    - (r.social_security || 0) - (r.job_insurance || 0)
+                  );
+                  return (
+                    <tr key={r.employee_id} style={s.tr}>
+                      <td style={{ ...s.td, fontWeight:700 }}>
+                        {r.employees?.nickname}
+                        {r.has_review && <span style={s.reviewDot}>⚠️</span>}
+                      </td>
+                      <td style={{ ...s.td, color:"#64748b" }}>
+                        {r.employees?.emp_type === "permanent" ? "ประจำ" : "ทดลอง"}
+                      </td>
+                      <td style={{ ...s.td, textAlign:"right" }}>{r.holiday_days || 0} วัน</td>
+                      <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.holiday_wage)}</td>
+                      <td style={{ ...s.td, textAlign:"right" }}>{r.ot_hours || 0} ชม.</td>
+                      <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.ot_amount)}</td>
+                      <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>
+                        {r.social_security > 0 ? `(${fmt(r.social_security)})` : "—"}
+                      </td>
+                      <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>
+                        {r.job_insurance > 0 ? `(${fmt(r.job_insurance)})` : "—"}
+                      </td>
+                      <td style={{ ...s.td, textAlign:"right",
+                        fontWeight:700, fontSize:15, color:"#4c1d95" }}>
+                        {fmtInt(monthEndPay)}
+                      </td>
+                      <td style={{ ...s.td, textAlign:"center" }}>
+                        <button
+                          onClick={() => setDetail({ record: r,
+                            cycleWage: (r.holiday_wage||0)+(r.ot_amount||0),
+                            advAmt: (r.social_security||0)+(r.job_insurance||0),
+                            toPay: monthEndPay,
+                            cycleDays: r.holiday_days || 0,
+                            isMonthEnd: true })}
+                          style={s.glassBtn} title="ดูรายละเอียด">🔍</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ background:"#f5f3ff" }}>
+                  <td style={s.td} colSpan={8}>
+                    <span style={{ fontWeight:700, color:"#4c1d95" }}>รวมที่ต้องจ่ายสิ้นเดือน</span>
+                  </td>
+                  <td style={{ ...s.td, textAlign:"right",
+                    fontWeight:800, fontSize:17, color:"#4c1d95" }}>
+                    {fmtInt(payrolls.reduce((sum, r) => sum + Math.max(0,
+                      (r.holiday_wage||0)+(r.ot_amount||0)-(r.social_security||0)-(r.job_insurance||0)
+                    ), 0))}
+                  </td>
+                  <td style={s.td} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {!period?.is_month_end_paid && role === "owner" && (
+            <div style={s.markRow}>
+              <button
+                onClick={markMonthEndPaid}
+                disabled={markingMonthEnd}
+                style={{ ...s.markBtn, background:"#7c3aed",
+                  opacity: markingMonthEnd ? 0.6 : 1 }}>
+                {markingMonthEnd ? "⏳ กำลังบันทึก..." : "💜 Mark จ่ายสิ้นเดือนแล้ว"}
+              </button>
+              <span style={{ fontSize:12, color:"#94a3b8" }}>
+                อาทิตย์ + OT หักปกส.+ประกันงาน
+              </span>
+            </div>
+          )}
+
+          {period?.is_month_end_paid && period?.month_end_paid_at && (
+            <p style={s.paidAt}>
+              จ่ายแล้วเมื่อ {new Date(period.month_end_paid_at).toLocaleString("th-TH")}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ══ Modal รายละเอียดรายคน ══ */}
       {detail && (
