@@ -127,15 +127,23 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode }) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// แยกเวลาหลายตัวในช่องเดียว ("07:53 13:49") + ลบตัวซ้ำ + เรียง
+// แยกเวลาหลายตัวในช่องเดียว ("07:53 13:49") + ลบตัวซ้ำ
+//
+// ⚠️ ไม่ sort() — เวลาต้องเรียงตามลำดับที่สแกนจริง
+//    (ZKTeco export ลำดับสแกน ไม่ใช่เรียงตัวอักษร)
+//    การ sort จะเกิดก็ต่อเมื่อ dedupe กรณี 5+ punch เท่านั้น
 // ════════════════════════════════════════════════════════════════
 function splitTimes(s) {
   if (!s || !s.trim()) return [];
   const seen = new Set(), out = [];
   for (const p of s.trim().split(/\s+/)) {
-    if (/^\d{1,2}:\d{2}$/.test(p) && !seen.has(p)) { seen.add(p); out.push(p); }
+    if (/^\d{1,2}:\d{2}$/.test(p) && !seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
   }
-  return out.sort();
+  // ❌ ไม่ sort() ที่นี่ — ลำดับสแกนสำคัญ
+  return out;
 }
 
 // แปลงวันที่ MM/DD/YYYY (ค.ศ.) → YYYY-MM-DD
@@ -144,6 +152,97 @@ function parseDate(s) {
   if (!m) return null;
   const [, mm, dd, yyyy] = m;
   return `${yyyy}-${mm}-${dd}`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// assignPunches — แปลง punches ดิบ → 4 จุดมาตรฐาน
+//
+// กลยุทธ์:
+//   4 punches (ins=2, outs=2) → ปกติ assign ตรง
+//   < 4                       → ใส่เท่าที่จับได้ + needsReview
+//   5+ punches                → ZKTeco export ผิด (สแกนซ้ำ/เครื่องพัง)
+//     1. dedupe + sort เวลา
+//     2. ถ้าเหลือ 4 → assign ปกติ + needsReview ให้ HR ยืนยัน
+//     3. ถ้ายังเกิน 4 → เลือก [0][1][-2][-1] + needsReview
+// ════════════════════════════════════════════════════════════════
+function assignPunches(ins, outs) {
+  const all = [...ins, ...outs];
+
+  // เคสปกติ
+  if (all.length === 4 && ins.length === 2 && outs.length === 2) {
+    return {
+      checkIn:  ins[0],
+      lunchIn:  ins[1],
+      lunchOut: outs[0],
+      checkOut: outs[1],
+      needsReview: false,
+      reason: "",
+    };
+  }
+
+  // ไม่มีข้อมูลเลย
+  if (all.length === 0) {
+    return {
+      checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
+      needsReview: true,
+      reason: "ไม่สแกนเลย (ขาด/ลา?)",
+    };
+  }
+
+  // 5+ punch → ZKTeco export ผิด
+  if (all.length >= 5) {
+    // dedupe ก่อน (12:01 อาจซ้ำระหว่าง ins กับ outs)
+    // sort ได้ตรงนี้ เพราะเราไม่รู้ลำดับที่แน่นอนแล้ว
+    const clean = [...new Set(all)].sort();
+
+    if (clean.length === 4) {
+      // หลัง dedupe เหลือพอดี 4 → assign ปกติ แต่ยัง flag ให้ HR ตรวจ
+      return {
+        checkIn:  clean[0],
+        lunchIn:  clean[1],
+        lunchOut: clean[2],
+        checkOut: clean[3],
+        needsReview: true,
+        reason: `ZKTime export ${all.length} punches (มี duplicate) — ระบบ dedupe เหลือ 4 กรุณาตรวจ`,
+      };
+    }
+
+    // ยังเกิน 4 แม้ dedupe → เลือก [0][1][-2][-1]
+    return {
+      checkIn:  clean[0],
+      lunchIn:  clean[1],
+      lunchOut: clean[clean.length - 2],
+      checkOut: clean[clean.length - 1],
+      needsReview: true,
+      reason: `ZKTime export ${all.length} punches (${clean.length} unique) — ระบบเลือกอัตโนมัติ กรุณาตรวจ`,
+    };
+  }
+
+  // < 4 punch — ใส่เท่าที่มี
+  const result = {
+    checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
+    needsReview: true,
+    reason: "",
+  };
+
+  if (ins.length === 2 && outs.length === 1) {
+    result.checkIn = ins[0]; result.lunchIn = ins[1]; result.lunchOut = outs[0];
+    result.reason = "ยังไม่สแกนออกเย็น";
+  } else if (ins.length === 1 && outs.length === 1) {
+    result.checkIn = ins[0]; result.lunchOut = outs[0];
+    result.reason = "มีแค่เข้าเช้า + ออกเที่ยง";
+  } else if (ins.length === 1 && outs.length === 0) {
+    result.checkIn = ins[0];
+    result.reason = "มีแค่เข้าเช้า";
+  } else {
+    if (ins[0])  result.checkIn  = ins[0];
+    if (ins.length > 1) result.lunchIn = ins[ins.length - 1];
+    if (outs[0]) result.lunchOut = outs[0];
+    if (outs.length > 1) result.checkOut = outs[outs.length - 1];
+    result.reason = `สแกนผิดปกติ (เข้า ${ins.length}, ออก ${outs.length})`;
+  }
+
+  return result;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -168,7 +267,7 @@ export function parseZKTecoCSV(text) {
     const [devUid, devName, dateRaw, inS, outS] = cols.map(c => c.trim());
 
     const empCode = DEVICE_MAP[devUid];
-    if (!empCode) {                       // ไม่อยู่ใน map = ไม่ต้องคิดเงิน
+    if (!empCode) {
       skipped.push({ devUid, devName });
       continue;
     }
@@ -176,44 +275,18 @@ export function parseZKTecoCSV(text) {
     const date = parseDate(dateRaw);
     if (!date) continue;
 
-    const ins  = splitTimes(inS);   // [เข้าเช้า, (เข้าเที่ยง)]
-    const outs = splitTimes(outS);  // [ออกเที่ยง, (ออกเย็น)]
+    const ins  = splitTimes(inS);
+    const outs = splitTimes(outS);
 
-    const rec = {
-      date, deviceUid: devUid, deviceName: devName, empCode,
-      checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
-      needsReview: false, reason: "",
-    };
+    const assigned = assignPunches(ins, outs);
 
-    // เคสปกติ: เข้า 2 + ออก 2 → ครบ 4 จุด
-    if (ins.length === 2 && outs.length === 2) {
-      rec.checkIn  = ins[0];
-      rec.lunchIn  = ins[1];
-      rec.lunchOut = outs[0];
-      rec.checkOut = outs[1];
-    } else {
-      // ไม่ครบ → ใส่เท่าที่จับได้ + ตั้งธงให้ HR ตรวจ
-      rec.needsReview = true;
-      if (ins.length === 0 && outs.length === 0) {
-        rec.reason = "ไม่สแกนเลย (ขาด/ลา?)";
-      } else if (ins.length === 2 && outs.length === 1) {
-        rec.checkIn = ins[0]; rec.lunchIn = ins[1]; rec.lunchOut = outs[0];
-        rec.reason = "ยังไม่สแกนออกเย็น";
-      } else if (ins.length === 1 && outs.length === 1) {
-        rec.checkIn = ins[0]; rec.lunchOut = outs[0];
-        rec.reason = "มีแค่เข้าเช้า + ออกเที่ยง";
-      } else if (ins.length === 1 && outs.length === 0) {
-        rec.checkIn = ins[0];
-        rec.reason = "มีแค่เข้าเช้า";
-      } else {
-        if (ins[0]) rec.checkIn = ins[0];
-        if (ins.length > 1) rec.lunchIn = ins[ins.length - 1];
-        if (outs[0]) rec.lunchOut = outs[0];
-        if (outs.length > 1) rec.checkOut = outs[outs.length - 1];
-        rec.reason = `สแกนผิดปกติ (เข้า ${ins.length}, ออก ${outs.length})`;
-      }
-    }
-    rows.push(rec);
+    rows.push({
+      date,
+      deviceUid: devUid,
+      deviceName: devName,
+      empCode,
+      ...assigned,
+    });
   }
 
   return { rows, skipped };
