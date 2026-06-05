@@ -232,6 +232,18 @@ export async function calcPayroll(year, month) {
 
     const net_pay = Math.round(total_income - total_deduct);
 
+    // ── แยกยอดตามรอบจ่าย ──
+    // รอบเสาร์ = ค่าแรงวันทำจริง − หักสาย − เบิกเงินสด − รายจ่ายอื่น
+    //   (สิ่งที่หักทุกคนระหว่างเดือน → ใช้คิด "เบิกได้อีกเท่าไหร่")
+    const saturday_pay = parseFloat((
+      base_wage - late_deduct - advance_total - other_deduct
+    ).toFixed(2));
+
+    // สิ้นเดือน = เบี้ยขยัน + OT + ค่าแรงอาทิตย์ − ปกส. − ประกันงาน
+    const month_end_pay = parseFloat((
+      diligence_bonus + ot_amount + holiday_wage - social_security - job_insurance
+    ).toFixed(2));
+
     results.push({
       employee_id:       emp.id,
       emp_code:          emp.emp_code,
@@ -265,6 +277,8 @@ export async function calcPayroll(year, month) {
       total_income,
       total_deduct,
       net_pay,
+      saturday_pay,
+      month_end_pay,
       has_review,
     });
   }
