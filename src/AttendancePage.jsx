@@ -45,9 +45,9 @@ export default function AttendancePage({ role }) {
   const [activeSection,  setActiveSection]  = useState("upload");
 
   // ── state สำหรับ edit mode ─────────────────────────────
-  const [reviewLogs,   setReviewLogs]   = useState([]); // logs ที่ needs_hr_review
+  const [reviewLogs,   setReviewLogs]   = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
-  const [editRow,      setEditRow]      = useState(null); // row ที่กำลังแก้
+  const [editRow,      setEditRow]      = useState(null);
   const [editValues,   setEditValues]   = useState({});
   const [savingEdit,   setSavingEdit]   = useState(false);
   const [editMsg,      setEditMsg]      = useState(null);
@@ -71,7 +71,6 @@ export default function AttendancePage({ role }) {
     finally { setLoadingImports(false); }
   };
 
-  // ── โหลด logs ที่ต้องตรวจ ─────────────────────────────
   const loadReviewLogs = async () => {
     setLoadingReview(true);
     setEditMsg(null);
@@ -85,7 +84,6 @@ export default function AttendancePage({ role }) {
     setLoadingReview(false);
   };
 
-  // ── เปิด modal แก้ไข ──────────────────────────────────
   const openEdit = (log) => {
     setEditRow(log);
     setEditValues({
@@ -98,13 +96,11 @@ export default function AttendancePage({ role }) {
     setEditMsg(null);
   };
 
-  // ── บันทึกการแก้ไข ────────────────────────────────────
   const saveEdit = async () => {
     if (!editRow) return;
     setSavingEdit(true);
     setEditMsg(null);
 
-    // คำนวณ late/OT ใหม่จากเวลาที่แก้
     const emp = employees.find(e => e.id === editRow.employee_id);
     const { lateMin, otHours } = calcDay({
       checkIn:  editValues.scan_am_in  || null,
@@ -114,8 +110,9 @@ export default function AttendancePage({ role }) {
       empCode:  emp?.emp_code || "",
     });
 
-    const allFilled = editValues.scan_am_in && editValues.scan_am_out
-      && editValues.scan_pm_in && editValues.scan_pm_out;
+    // ✅ แก้: !! บังคับให้เป็น boolean จริงๆ ไม่ใช่ string
+    const allFilled = !!(editValues.scan_am_in && editValues.scan_am_out
+      && editValues.scan_pm_in && editValues.scan_pm_out);
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -127,7 +124,7 @@ export default function AttendancePage({ role }) {
         late_minutes:    lateMin,
         ot_hours:        otHours,
         hr_note:         editValues.hr_note || null,
-        needs_hr_review: !allFilled, // ถ้ากรอกครบ 4 จุด → ปลด review
+        needs_hr_review: !allFilled,
         is_confirmed:    allFilled,
         updated_at:      new Date().toISOString(),
       })
@@ -143,7 +140,6 @@ export default function AttendancePage({ role }) {
     setSavingEdit(false);
   };
 
-  // ── Upload CSV ─────────────────────────────────────────
   const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -185,7 +181,6 @@ export default function AttendancePage({ role }) {
     catch (e) { alert("ลบไม่สำเร็จ: " + e.message); }
   };
 
-  // ─── TABS ────────────────────────────────────────────
   const SECTIONS = [
     { id: "upload",  label: "📤 อัพโหลด CSV" },
     { id: "review",  label: `🟡 แก้ไขย้อนหลัง` },
@@ -194,7 +189,6 @@ export default function AttendancePage({ role }) {
 
   return (
     <div style={s.page}>
-      {/* แท็บ */}
       <div style={s.sectionTabs}>
         {SECTIONS.map(sec => (
           <button key={sec.id}
@@ -205,7 +199,6 @@ export default function AttendancePage({ role }) {
         ))}
       </div>
 
-      {/* ══ UPLOAD ══ */}
       {activeSection === "upload" && (
         <div style={s.section}>
           <label style={s.uploadZone}>
@@ -279,7 +272,6 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
-      {/* ══ REVIEW / แก้ไขย้อนหลัง ══ */}
       {activeSection === "review" && (
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -319,7 +311,6 @@ export default function AttendancePage({ role }) {
                 </div>
                 <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>
               </div>
-              {/* แสดงเวลาที่มีอยู่ */}
               <div style={{ display:"flex", gap:16, marginTop:8, fontSize:13 }}>
                 {[["เข้าเช้า", log.scan_am_in], ["พักออก", log.scan_am_out],
                   ["พักกลับ", log.scan_pm_in], ["ออกเย็น", log.scan_pm_out]].map(([label, val]) => (
@@ -335,7 +326,6 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
-      {/* ══ HISTORY ══ */}
       {activeSection === "history" && (
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
@@ -369,7 +359,6 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
-      {/* ══ MODAL แก้ไข ══ */}
       {editRow && (
         <div style={s.modalOverlay} onClick={() => setEditRow(null)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
