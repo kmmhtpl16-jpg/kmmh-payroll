@@ -192,7 +192,7 @@ export async function calcPayroll(year, month) {
     const insurance_refund = 0;
 
     // ปกส.
-    const ss_base = permStartInMonth ? perm_base : base_wage;
+    const ss_base = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
     // ประกันงาน
