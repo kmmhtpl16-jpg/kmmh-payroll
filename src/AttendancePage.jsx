@@ -4,6 +4,17 @@ import { parseZKTecoCSV, calcDay } from "./attendanceLogic";
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 
+// ── ปุ่ม preset หมายเหตุ HR ──
+// กดแล้วใส่ข้อความลงช่อง hr_note อัตโนมัติ แก้เพิ่มได้ที่นี่
+const HR_NOTE_PRESETS = [
+  { label: "ลาป่วย",         value: "ลาป่วย" },
+  { label: "ลากิจ",          value: "ลากิจ" },
+  { label: "ลาครึ่งวัน",     value: "ลาครึ่งวัน" },
+  { label: "ออกระหว่างวัน",  value: "ออกระหว่างวัน" },
+  { label: "ขาดงาน",         value: "ขาดงาน" },
+  { label: "วันหยุด",        value: "วันหยุดบริษัท" },
+];
+
 function processAttendance(rows, employees) {
   return rows.map((r) => {
     const emp = employees.find((e) => e.emp_code === r.empCode);
@@ -32,9 +43,7 @@ function processAttendance(rows, employees) {
 // ✅ แปลง "HH:mm" ให้แน่ใจว่าเป็น 24 ชม. เสมอ
 function to24h(val) {
   if (!val) return "";
-  // ถ้าเป็น HH:mm อยู่แล้ว (ไม่มี AM/PM) ส่งคืนเลย
   if (/^\d{2}:\d{2}$/.test(val)) return val;
-  // แปลง 12h → 24h
   const [time, period] = val.split(" ");
   if (!period) return val;
   let [h, m] = time.split(":").map(Number);
@@ -106,7 +115,6 @@ export default function AttendancePage({ role }) {
     setSavingEdit(true);
     setEditMsg(null);
 
-    // ✅ แปลงเป็น 24h ก่อนส่ง
     const am_in  = to24h(editValues.scan_am_in);
     const am_out = to24h(editValues.scan_am_out);
     const pm_in  = to24h(editValues.scan_pm_in);
@@ -121,7 +129,6 @@ export default function AttendancePage({ role }) {
       empCode:  emp?.emp_code || "",
     });
 
-    // ✅ บังคับ boolean ด้วย === true
     const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
 
     const { error } = await supabase
@@ -384,7 +391,6 @@ export default function AttendancePage({ role }) {
                   <div key={key}>
                     <label style={{ display:"block", fontSize:12, color:"#64748b",
                       fontWeight:600, marginBottom:4 }}>{label}</label>
-                    {/* ✅ เปลี่ยนเป็น text + pattern บังคับ HH:mm 24ชม. ทำงานได้ทุก OS */}
                     <input
                       type="text"
                       inputMode="numeric"
@@ -392,7 +398,6 @@ export default function AttendancePage({ role }) {
                       value={editValues[key]}
                       onChange={e => {
                         let v = e.target.value.replace(/[^0-9:]/g,"");
-                        // auto-insert colon
                         if (v.length === 2 && !v.includes(":")) v = v + ":";
                         if (v.length > 5) v = v.slice(0,5);
                         setEditValues(p => ({ ...p, [key]: v }));
@@ -408,12 +413,25 @@ export default function AttendancePage({ role }) {
                 ))}
               </div>
 
-              <div style={{ marginBottom:12 }}>
+              {/* ── ปุ่ม preset หมายเหตุ HR ── */}
+              <div style={{ marginBottom:8 }}>
                 <label style={{ display:"block", fontSize:12, color:"#64748b",
-                  fontWeight:600, marginBottom:4 }}>หมายเหตุ HR</label>
+                  fontWeight:600, marginBottom:6 }}>หมายเหตุ HR</label>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
+                  {HR_NOTE_PRESETS.map(p => (
+                    <button key={p.value}
+                      onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
+                      style={{
+                        ...s.presetBtn,
+                        ...(editValues.hr_note === p.value ? s.presetBtnActive : {}),
+                      }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
                 <input type="text" value={editValues.hr_note}
                   onChange={e => setEditValues(p => ({ ...p, hr_note: e.target.value }))}
-                  placeholder="บันทึกเหตุผลที่แก้ไข"
+                  placeholder="หรือพิมพ์เองได้"
                   style={{ width:"100%", padding:"8px 10px", border:"1.5px solid #e2e8f0",
                     borderRadius:8, fontSize:14, boxSizing:"border-box" }} />
               </div>
@@ -484,4 +502,14 @@ const s = {
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
     padding:"14px 16px", background:"#1e3a5f", borderRadius:"16px 16px 0 0" },
   closeBtn: { background:"none", border:"none", color:"#fff", fontSize:20, cursor:"pointer", lineHeight:1 },
+
+  // ── preset buttons ──
+  presetBtn: {
+    padding:"5px 12px", borderRadius:20, border:"1.5px solid #e2e8f0",
+    background:"#f8fafc", cursor:"pointer", fontSize:13, fontWeight:600,
+    color:"#475569", transition:"all 0.15s",
+  },
+  presetBtnActive: {
+    background:"#dbeafe", borderColor:"#93c5fd", color:"#1e40af",
+  },
 };
