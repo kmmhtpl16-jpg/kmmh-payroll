@@ -1,52 +1,118 @@
-import { useState } from 'react'
-import EmployeesPage from './EmployeesPage'
-import AttendancePage from './AttendancePage'
+// src/App.jsx  (แก้จากของเดิม)
+// ─────────────────────────────────────────────
+// เพิ่ม: ระบบ PIN login ครอบทั้งแอป
+// - ยังไม่ login → แสดง LoginPage
+// - login แล้ว → แสดงแท็บปกติ (AttendancePage / EmployeesPage)
+// - role ที่ได้ ('hr' | 'owner') ส่งลงไปทุกหน้า
+// ─────────────────────────────────────────────
+
+import { useState } from "react";
+import LoginPage from "./LoginPage";
+import AttendancePage from "./AttendancePage";
+import EmployeesPage from "./EmployeesPage";
 
 const TABS = [
-  { key: 'employees',  label: 'ทะเบียนลูกจ้าง', icon: '👥' },
-  { key: 'attendance', label: 'บันทึกเวลา',     icon: '🕐' },
-]
+  { id: "attendance", label: "⏱ บันทึกเวลา" },
+  { id: "employees",  label: "👥 พนักงาน" },
+  // เพิ่มแท็บใหม่ตรงนี้ในอนาคต
+];
 
 export default function App() {
-  const [tab, setTab] = useState('employees')
+  const [role, setRole] = useState(null); // null = ยังไม่ login
+  const [activeTab, setActiveTab] = useState("attendance");
 
+  // ─── ยังไม่ login → แสดงหน้า PIN ─────────────────────────
+  if (!role) {
+    return <LoginPage onLogin={(r) => setRole(r)} />;
+  }
+
+  // ─── Login แล้ว → แสดงแอปหลัก ────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', background: '#fff' }}>
-      {/* Top nav */}
-      <div style={{
-        borderBottom: '0.5px solid #e5e5e5', background: '#fafafa',
-        position: 'sticky', top: 0, zIndex: 50,
-      }}>
-        <div style={{
-          maxWidth: 1200, margin: '0 auto', padding: '0 1rem',
-          display: 'flex', alignItems: 'center', gap: 4, height: 52,
-        }}>
-          <span style={{ fontWeight: 700, fontSize: 15, color: '#111', marginRight: 16 }}>
-            KMMH Payroll
-          </span>
-          {TABS.map(t => {
-            const on = tab === t.key
-            return (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                style={{
-                  background: on ? '#111' : 'transparent',
-                  color: on ? '#fff' : '#555',
-                  border: 'none', borderRadius: 8,
-                  padding: '7px 14px', cursor: 'pointer',
-                  fontSize: 13, fontWeight: 500,
-                  fontFamily: 'sans-serif',
-                  display: 'flex', alignItems: 'center', gap: 6,
-                }}>
-                <span>{t.icon}</span>{t.label}
-              </button>
-            )
-          })}
+    <div style={styles.app}>
+      {/* Header */}
+      <header style={styles.header}>
+        <span style={styles.headerTitle}>KMMH Payroll</span>
+        <div style={styles.roleTag}>
+          {role === "owner" ? "👑 เจ้าของ" : "🧑‍💼 HR"}
         </div>
-      </div>
+        <button
+          onClick={() => setRole(null)}
+          style={styles.logoutBtn}
+          title="ออกจากระบบ"
+        >
+          🔒 ออก
+        </button>
+      </header>
+
+      {/* Tab bar */}
+      <nav style={styles.tabBar}>
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            style={{
+              ...styles.tabBtn,
+              ...(activeTab === t.id ? styles.tabBtnActive : {}),
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
       {/* Page content */}
-      {tab === 'employees'  && <EmployeesPage />}
-      {tab === 'attendance' && <AttendancePage />}
+      <main style={styles.main}>
+        {activeTab === "attendance" && (
+          <AttendancePage role={role} />
+        )}
+        {activeTab === "employees" && (
+          <EmployeesPage role={role} />
+        )}
+      </main>
     </div>
-  )
+  );
 }
+
+const styles = {
+  app: {
+    minHeight: "100vh",
+    display: "flex", flexDirection: "column",
+    background: "#f0f4f8",
+    fontFamily: "'Sarabun', sans-serif",
+  },
+  header: {
+    background: "#1e3a5f",
+    color: "#fff",
+    padding: "0.75rem 1rem",
+    display: "flex", alignItems: "center", gap: "0.75rem",
+  },
+  headerTitle: { fontWeight: 700, fontSize: 18, flex: 1 },
+  roleTag: {
+    background: "rgba(255,255,255,0.15)",
+    borderRadius: 20, padding: "2px 10px",
+    fontSize: 13,
+  },
+  logoutBtn: {
+    background: "rgba(255,255,255,0.1)",
+    border: "1px solid rgba(255,255,255,0.3)",
+    color: "#fff", borderRadius: 8,
+    padding: "4px 10px", cursor: "pointer", fontSize: 13,
+  },
+  tabBar: {
+    display: "flex", background: "#fff",
+    borderBottom: "2px solid #e2e8f0",
+    padding: "0 1rem",
+  },
+  tabBtn: {
+    padding: "0.75rem 1.25rem",
+    border: "none", background: "none",
+    color: "#64748b", fontSize: 14, fontWeight: 600,
+    cursor: "pointer", borderBottom: "3px solid transparent",
+    marginBottom: -2, transition: "all 0.15s",
+  },
+  tabBtnActive: {
+    color: "#2563eb",
+    borderBottom: "3px solid #2563eb",
+  },
+  main: { flex: 1, padding: "1rem" },
+};
