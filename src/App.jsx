@@ -3,14 +3,16 @@ import { useState } from "react";
 import LoginPage from "./LoginPage";
 import AttendancePage from "./AttendancePage";
 import EmployeesPage from "./EmployeesPage";
-import PayrollPage from "./PayrollPage";
 import WeeklySummaryPage from "./WeeklySummaryPage";
+import PayrollPage from "./PayrollPage";
+import SettingsPage from "./SettingsPage";
 
 const TABS = [
   { id: "attendance", label: "⏱ บันทึกเวลา" },
   { id: "employees",  label: "👥 พนักงาน" },
   { id: "weekly",     label: "📅 รายอาทิตย์" },
   { id: "payroll",    label: "💰 เงินเดือน" },
+  { id: "settings",   label: "⚙️ ตั้งค่า" },
 ];
 
 export default function App() {
@@ -43,6 +45,7 @@ export default function App() {
         {activeTab === "employees"  && <EmployeesPage role={role} />}
         {activeTab === "weekly"     && <WeeklySummaryPage role={role} />}
         {activeTab === "payroll"    && <PayrollPage role={role} />}
+        {activeTab === "settings"   && <SettingsPage role={role} />}
       </main>
     </div>
   );
