@@ -1,4 +1,7 @@
 // src/PayrollPage.jsx
+// หน้าเงินเดือน — ภาพรวมทั้งเดือนรายคน
+// 🔧 v3: เลิกแยกเสาร์/สิ้นเดือน — แสดงรายได้รวม / รายหักรวม / สุทธิ ทั้งเดือน
+//        (การแยกรอบจ่ายย้ายไปหน้า 📅 รายอาทิตย์)
 import { useState } from "react";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
 import { exportPayrollExcel } from "./payrollExport";
@@ -87,11 +90,11 @@ export default function PayrollPage({ role }) {
         <>
           <div style={s.cardRow}>
             {[
-              { label:"พนักงาน",   value: fmtInt(result.summary.count) + " คน", color:"#1e3a5f" },
-              { label:"รายได้รวม", value: fmt(result.summary.total_income),      color:"#166534" },
-              { label:"รายหักรวม", value: fmt(result.summary.total_deduct),      color:"#991b1b" },
-              { label:"จ่ายรอบเสาร์รวม",  value: fmtInt(result.results.reduce((a,r)=>a+r.saturday_pay,0)),  color:"#1e40af", big:true },
-              { label:"ปกส.รวม",   value: fmt(result.summary.total_ss),          color:"#6b7280" },
+              { label:"พนักงาน",     value: fmtInt(result.summary.count) + " คน", color:"#1e3a5f" },
+              { label:"รายได้รวม",   value: fmt(result.summary.total_income),      color:"#166534" },
+              { label:"รายหักรวม",   value: fmt(result.summary.total_deduct),      color:"#991b1b" },
+              { label:"จ่ายสุทธิรวม", value: fmtInt(result.summary.total_net_pay),  color:"#1e40af", big:true },
+              { label:"ปกส.รวม",     value: fmt(result.summary.total_ss),          color:"#6b7280" },
             ].map((c,i) => (
               <div key={i} style={{ ...s.card, borderColor: c.color }}>
                 <p style={s.cardLabel}>{c.label}</p>
@@ -113,8 +116,8 @@ export default function PayrollPage({ role }) {
             <table style={s.table}>
               <thead>
                 <tr>
-                  {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","OT","ตำแหน่ง","เบี้ยขยัน",
-                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","รายหักรวม","จ่ายรอบเสาร์",""].map(h => (
+                  {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","ค่าอาทิตย์","OT","ตำแหน่ง","เบี้ยขยัน",
+                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ",""].map(h => (
                     <th key={h} style={s.th}>{h}</th>
                   ))}
                 </tr>
@@ -130,6 +133,7 @@ export default function PayrollPage({ role }) {
                     <td style={{ ...s.td, textAlign:"right" }}>{r.work_days}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{r.ot_hours}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.base_wage)}</td>
+                    <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.holiday_wage)}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.ot_amount)}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.position_allowance)}</td>
                     <td style={{ ...s.td, textAlign:"right", color: r.diligence_bonus>0?"#166534":"#9ca3af" }}>
@@ -144,9 +148,12 @@ export default function PayrollPage({ role }) {
                     <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(r.late_deduct)}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.social_security)}</td>
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.job_insurance)}</td>
+                    <td style={{ ...s.td, textAlign:"right", color: r.advance_total>0?"#dc2626":"#9ca3af" }}>
+                      {r.advance_total>0 ? fmt(r.advance_total) : "—"}
+                    </td>
                     <td style={{ ...s.td, textAlign:"right", color:"#991b1b" }}>{fmt(r.total_deduct)}</td>
-                    <td style={{ ...s.td, textAlign:"right", fontWeight:700, fontSize:15, color:"#1e3a5f" }}>
-                      {fmtInt(r.saturday_pay)}
+                    <td style={{ ...s.td, textAlign:"right", fontWeight:700, fontSize:15, color:"#1e40af" }}>
+                      {fmtInt(r.net_pay)}
                     </td>
                     <td style={s.td}>
                       <button onClick={e => { e.stopPropagation(); setDetail(r); }} style={s.detailBtn}>ดู</button>
@@ -157,17 +164,19 @@ export default function PayrollPage({ role }) {
               <tfoot>
                 <tr style={{ background:"#f0f4f8", fontWeight:700 }}>
                   <td style={s.td} colSpan={4}>รวม</td>
-                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((s,r)=>s+r.base_wage,0))}</td>
-                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((s,r)=>s+r.ot_amount,0))}</td>
-                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((s,r)=>s+r.position_allowance,0))}</td>
-                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((s,r)=>s+r.diligence_bonus,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.base_wage,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.holiday_wage,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.ot_amount,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.position_allowance,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.diligence_bonus,0))}</td>
                   <td style={{ ...s.td, textAlign:"right", color:"#166534" }}>{fmt(result.summary.total_income)}</td>
                   <td style={s.td}></td>
-                  <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(result.results.reduce((s,r)=>s+r.late_deduct,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(result.results.reduce((a,r)=>a+r.late_deduct,0))}</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.summary.total_ss)}</td>
-                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((s,r)=>s+r.job_insurance,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.job_insurance,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(result.results.reduce((a,r)=>a+r.advance_total,0))}</td>
                   <td style={{ ...s.td, textAlign:"right", color:"#991b1b" }}>{fmt(result.summary.total_deduct)}</td>
-                  <td style={{ ...s.td, textAlign:"right", color:"#1e3a5f" }}>{fmtInt(result.results.reduce((s,r)=>s+r.saturday_pay,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right", color:"#1e40af" }}>{fmtInt(result.summary.total_net_pay)}</td>
                   <td style={s.td}></td>
                 </tr>
               </tfoot>
@@ -176,7 +185,7 @@ export default function PayrollPage({ role }) {
         </>
       )}
 
-      {/* ── Modal รายละเอียดรายคน ── */}
+      {/* ── Modal รายละเอียดรายคน (ภาพรวมทั้งเดือน) ── */}
       {detail && (
         <div style={s.modalOverlay} onClick={() => setDetail(null)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
@@ -188,14 +197,26 @@ export default function PayrollPage({ role }) {
             </div>
 
             <div style={s.modalBody}>
-              {/* ── รอบเสาร์: ค่าแรงวันทำจริง − หักสาย − เบิก − รายจ่าย ── */}
-              <p style={s.sectionTitle}>🔵 รอบเสาร์ (เบิกได้ระหว่างเดือน)</p>
+              {/* ── รายได้ทั้งเดือน ── */}
+              <p style={s.sectionTitle}>💰 รายได้ทั้งเดือน</p>
               {[
                 ["ค่าแรง/วัน",        fmt(detail.daily_rate)],
                 ["วันทำงาน",          detail.work_days + " วัน"],
-                ["ค่าแรงปกติ",        fmt(detail.base_wage)],
-                ["หักสาย",            `${detail.late_minutes} น. = (${fmt(detail.late_deduct)})`],
+                ["ค่าแรงปกติ",        `+${fmt(detail.base_wage)}`],
+                ["ค่าแรงวันอาทิตย์",  `+${fmt(detail.holiday_wage)}`],
+                ["OT",                `${detail.ot_hours} ชม. = +${fmt(detail.ot_amount)}`],
+                ["เงินประจำตำแหน่ง",  `+${fmt(detail.position_allowance)}`],
+                ["เบี้ยขยัน",         `+${fmt(detail.diligence_bonus)}`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} />)}
+              <Row label="รวมรายได้" value={fmt(detail.total_income)} bold green />
+
+              {/* ── รายหักทั้งเดือน ── */}
+              <p style={{ ...s.sectionTitle, marginTop:14 }}>📉 รายหักทั้งเดือน</p>
+              {[
+                ["หักสาย",            `${detail.late_minutes} น. = (${fmt(detail.late_deduct)})`],
+                ["ประกันสังคม (5%)",  `(${fmt(detail.social_security)})`],
+                ["ประกันงาน",         `(${fmt(detail.job_insurance)})`],
+              ].map(([k,v]) => <Row key={k} label={k} value={v} red />)}
 
               {/* รายจ่ายพนักงาน — แสดงรายการย่อย */}
               {detail.deduction_items?.length > 0 && (
@@ -216,32 +237,21 @@ export default function PayrollPage({ role }) {
                 </div>
               )}
               {detail.advance_total > 0 && (
-                <Row label="เบิกล่วงหน้า (รวม)" value={`(${fmt(detail.advance_total)})`} red />
+                <Row label="เบิกล่วงหน้า (รวมทั้งเดือน)" value={`(${fmt(detail.advance_total)})`} red />
               )}
+              <Row label="รวมรายหัก" value={fmt(detail.total_deduct)} bold red />
 
-              {/* สุทธิรอบเสาร์ = เบิกได้ */}
+              {/* ── สุทธิทั้งเดือน ── */}
               <div style={s.netBox}>
-                <span style={{ fontWeight:600 }}>💵 จ่ายรอบเสาร์</span>
-                <span style={{ fontSize:22, fontWeight:800, color:"#1e3a5f" }}>
-                  {fmtInt(detail.saturday_pay)} บาท
+                <span style={{ fontWeight:600 }}>💵 สุทธิทั้งเดือน</span>
+                <span style={{ fontSize:22, fontWeight:800, color:"#1e40af" }}>
+                  {fmtInt(detail.net_pay)} บาท
                 </span>
               </div>
 
-              {/* ── ยกไปสิ้นเดือน (ยังไม่จ่ายในรอบนี้) ── */}
-              <p style={{ ...s.sectionTitle, marginTop:14, color:"#7c3aed" }}>💜 ยกไปจ่ายสิ้นเดือน</p>
-              {[
-                ["เบี้ยขยัน",         `+${fmt(detail.diligence_bonus)}`],
-                ["ค่าแรงวันอาทิตย์",  `+${fmt(detail.holiday_wage)}`],
-                ["OT",                `+${detail.ot_hours} ชม. = ${fmt(detail.ot_amount)}`],
-                ["ประกันสังคม (5%)",  `(${fmt(detail.social_security)})`],
-                ["ประกันงาน",         `(${fmt(detail.job_insurance)})`],
-              ].map(([k,v]) => <Row key={k} label={k} value={v} />)}
-              <div style={{ ...s.netBox, background:"#f5f3ff", border:"2px solid #ddd6fe" }}>
-                <span style={{ fontWeight:600, color:"#4c1d95" }}>💜 จ่ายสิ้นเดือน</span>
-                <span style={{ fontSize:20, fontWeight:800, color:"#4c1d95" }}>
-                  {fmtInt(detail.month_end_pay)} บาท
-                </span>
-              </div>
+              <p style={{ marginTop:10, fontSize:12, color:"#94a3b8", textAlign:"center" }}>
+                💡 ดูว่าจ่ายรอบไหนเท่าไหร่ → แท็บ 📅 รายอาทิตย์
+              </p>
 
               {detail.has_review && (
                 <div style={{ marginTop:8, padding:"8px 12px", background:"#fffbeb",
@@ -269,7 +279,7 @@ function Row({ label, value, bold, green, red }) {
 }
 
 const s = {
-  page: { maxWidth:1100, margin:"0 auto" },
+  page: { maxWidth:1200, margin:"0 auto" },
   topBar: { display:"flex", alignItems:"flex-end", gap:12, marginBottom:12,
     flexWrap:"wrap", background:"#fff", padding:16, borderRadius:12,
     boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
@@ -305,7 +315,7 @@ const s = {
   netBox: { display:"flex", justifyContent:"space-between", alignItems:"center",
     marginTop:12, padding:"10px 14px", background:"#eff6ff", borderRadius:10, border:"2px solid #bfdbfe" },
   // รายจ่ายพนักงาน
-  deductBox: { border:"1px solid #fde68a", borderRadius:8, overflow:"hidden", marginBottom:4 },
+  deductBox: { border:"1px solid #fde68a", borderRadius:8, overflow:"hidden", margin:"4px 0" },
   deductHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
     padding:"6px 10px", background:"#fffbeb", fontWeight:700, fontSize:13, color:"#92400e" },
   deductTotal: { fontWeight:700, color:"#991b1b" },
