@@ -1,7 +1,13 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v2
+// คำนวณเงินเดือน KMMH — v3
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v3 เปลี่ยนจาก v2:
+//   • หน้าเงินเดือน = ยอดรวมทั้งเดือน (ไม่แยกเสาร์/สิ้นเดือนแล้ว)
+//   • เอา saturday_pay / month_end_pay ออก — ให้หน้าจ่ายเงินคิดเอง
+//     โดยใช้สูตร: สิ้นเดือน = net_pay − เงินจ่ายเสาร์ทุกรอบ (ส่วนเหลือ)
+//     → รับประกัน เสาร์ + สิ้นเดือน = net_pay เป๊ะเสมอ
 // ─────────────────────────────────────────────────────────────
 
 import { supabase } from "./supabaseClient";
@@ -36,7 +42,6 @@ function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
 }
 
 // เบี้ยขยัน — trial ไม่ได้เลย
-// [แก้ #4] trial → 0 เสมอ
 function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
   if (empType !== "permanent") return 0;
   if (hasLeave) return 0;
@@ -49,6 +54,13 @@ function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
 function calcSocialSecurity(empType, base) {
   if (empType !== "permanent") return 0;
   return Math.min(parseFloat((base * 0.05).toFixed(2)), 875);
+}
+
+// helper: เลือก rate สำหรับ holiday_wage
+function usePermRate(emp, permStart, dateFrom) {
+  if (emp.emp_type !== "permanent") return false;
+  if (!permStart) return true;
+  return permStart <= dateFrom; // เข้าประจำก่อนต้นเดือน = ใช้ perm rate ทั้งเดือน
 }
 
 // ════════════════════════════════════════════════════════════
@@ -102,7 +114,6 @@ export async function calcPayroll(year, month) {
     .lte("deduct_date", dateTo);
 
   // ── ดึง advance_requests — กรองเฉพาะเดือนนี้ด้วย request_date ──
-  // [แก้ #2] เพิ่ม date filter กันนับ advance ข้ามเดือนซ้ำ
   const { data: advances } = await supabase
     .from("advance_requests")
     .select("employee_id, amount")
@@ -158,7 +169,8 @@ export async function calcPayroll(year, month) {
       if (usePerm) perm_base  += dayRate;
       else         trial_base += dayRate;
 
-      // late
+      // late — หมายเหตุ: late_minutes ของวันเสาร์ (เฉพาะสายเช้า) คิดมาจาก
+      //   attendanceLogic.js แล้ว เราใช้ค่าตรงนี้ตามจริง
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
       const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
@@ -186,7 +198,6 @@ export async function calcPayroll(year, month) {
     const diligence_bonus    = calcDiligenceBonus(late_minutes, has_leave, emp.emp_type);
 
     // app_fee (ค่าสมัคร 100 บาท)
-    // [แก้ #3] slice(0,10) กันกรณี timestamp มี timezone ทำให้เทียบผิด
     const trialStart = (emp.trial_start_date || "").slice(0, 10);
     const resignDate = (emp.resigned_date    || "").slice(0, 10);
     const isFirstMonth         = trialStart >= dateFrom && trialStart <= dateTo;
@@ -197,10 +208,7 @@ export async function calcPayroll(year, month) {
     // insurance_refund (ยังไม่ implement get_insurance_balance — ใส่ 0 ก่อน)
     const insurance_refund = 0;
 
-    // ปกส.
-    // [แก้ #1] ใช้ monthly_salary เป็นฐาน ไม่ใช่ base_wage
-    //   → ปกส. ไม่เปลี่ยนแม้พนักงานลาบางวัน (ตรงกับ Excel จริง)
-    //   → กรณีเข้าประจำกลางเดือน ยังใช้ perm_base (ค่าแรงช่วงประจำ) เหมือนเดิม
+    // ปกส. — ใช้ monthly_salary เป็นฐาน (ตรง Excel จริง ไม่เปลี่ยนแม้ลาบางวัน)
     const ss_base         = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
@@ -231,18 +239,6 @@ export async function calcPayroll(year, month) {
     ).toFixed(2));
 
     const net_pay = Math.round(total_income - total_deduct);
-
-    // ── แยกยอดตามรอบจ่าย ──
-    // รอบเสาร์ = ค่าแรงวันทำจริง − หักสาย − เบิกเงินสด − รายจ่ายอื่น
-    //   (สิ่งที่หักทุกคนระหว่างเดือน → ใช้คิด "เบิกได้อีกเท่าไหร่")
-    const saturday_pay = parseFloat((
-      base_wage - late_deduct - advance_total - other_deduct
-    ).toFixed(2));
-
-    // สิ้นเดือน = เบี้ยขยัน + OT + ค่าแรงอาทิตย์ − ปกส. − ประกันงาน
-    const month_end_pay = parseFloat((
-      diligence_bonus + ot_amount + holiday_wage - social_security - job_insurance
-    ).toFixed(2));
 
     results.push({
       employee_id:       emp.id,
@@ -277,8 +273,6 @@ export async function calcPayroll(year, month) {
       total_income,
       total_deduct,
       net_pay,
-      saturday_pay,
-      month_end_pay,
       has_review,
     });
   }
@@ -295,13 +289,6 @@ export async function calcPayroll(year, month) {
   };
 
   return { results, summary, daysInMonth: days };
-}
-
-// helper: เลือก rate สำหรับ holiday_wage
-function usePermRate(emp, permStart, dateFrom) {
-  if (emp.emp_type !== "permanent") return false;
-  if (!permStart) return true;
-  return permStart <= dateFrom; // เข้าประจำก่อนต้นเดือน = ใช้ perm rate ทั้งเดือน
 }
 
 // ════════════════════════════════════════════════════════════
