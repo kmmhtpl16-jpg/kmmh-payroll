@@ -107,7 +107,7 @@ export async function calcPayroll(year, month) {
 
   // ── ดึง deductions (รายจ่ายพนักงาน) ──
   const { data: deductions } = await supabase
-    .from("employee_deductions")
+    .from("deductions")
     .select("*, deduction_types(name)")
     .in("employee_id", empIds)
     .gte("deduct_date", dateFrom)
