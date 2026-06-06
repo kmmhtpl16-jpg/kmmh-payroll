@@ -25,6 +25,13 @@ export const RULES = {
   // เย็น — OT เลิกช้า (ทุกคน)
   OT_EVENING_1_MIN: 17 * 60 + 30,  // 17:30 → +1 ชม.
   OT_EVENING_2_MIN: 18 * 60,       // 18:00 → +2 ชม.
+
+  // ── 🆕 วันเสาร์ ──
+  //   เสาร์ทำครึ่งวัน มีแค่สแกนเข้าเช้าจุดเดียว
+  //   • สายเช้า → หักปกติ (1 บ/นาที)
+  //   • เที่ยง + เลิกงาน → ไม่นับสาย / ไม่หัก (ข้ามทั้งหมด)
+  //   • ค่าแรง → จ่ายเต็มวันเสมอ (จัดการในฝั่ง payrollCalc)
+  SATURDAY_MORNING_OT: false,  // วันเสาร์ให้ OT เข้าก่อนเวลาไหม? (default ปิด)
 };
 
 // รายชื่อ emp_code ที่เป็นพนักงานประจำ (ได้ OT เช้า) — ที่เหลือ trial
@@ -64,14 +71,25 @@ export function fmtLate(mins) {
   return m ? `${h}ชม.${m}น.` : `${h} ชม.`;
 }
 
+// เช็ควันเสาร์ จาก date string "YYYY-MM-DD"
+export function isSaturday(dateStr) {
+  if (!dateStr) return false;
+  return new Date(dateStr).getDay() === 6;
+}
+
 // ════════════════════════════════════════════════════════════════
 // คำนวณสาย/OT จาก 4 จุดสแกน
+//   รับ { checkIn, lunchOut, lunchIn, checkOut, empCode, date }
 //   คืน { lateMin, otHours, breakdown[] }
 //   ถ้าจุดไหน null → ข้ามการคำนวณส่วนนั้น (ยังไม่ครบ ให้ HR เติม)
+//
+//   🆕 ถ้า date เป็นวันเสาร์ → คิดเฉพาะสายเช้า ข้ามเที่ยง+เย็นทั้งหมด
+//      (จุดเรียก เช่น AttendancePage ต้องส่ง date ของวันนั้นเข้ามาด้วย)
 // ════════════════════════════════════════════════════════════════
-export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode }) {
+export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date }) {
   const R = RULES;
   const isPerm = PERMANENT_CODES.has(empCode);
+  const isSat  = isSaturday(date);
   let lateMin = 0, otHours = 0;
   const breakdown = [];
 
@@ -86,16 +104,24 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode }) {
       const m = ci - R.STD_IN_MIN;
       lateMin += m;
       breakdown.push({ type: "late", label: `เข้าสาย ${m} น.` });
-    } else if (isPerm && ci >= R.OT_MORNING_EARLY_MIN && ci <= R.OT_MORNING_MID_MIN) {
+    } else if ((!isSat || R.SATURDAY_MORNING_OT) && isPerm &&
+               ci >= R.OT_MORNING_EARLY_MIN && ci <= R.OT_MORNING_MID_MIN) {
       otHours += 2;
       breakdown.push({ type: "ot", label: "เข้าก่อน 06:30 → OT +2" });
-    } else if (isPerm && ci > R.OT_MORNING_MID_MIN && ci < R.OT_MORNING_LATE_MIN) {
+    } else if ((!isSat || R.SATURDAY_MORNING_OT) && isPerm &&
+               ci > R.OT_MORNING_MID_MIN && ci < R.OT_MORNING_LATE_MIN) {
       otHours += 1;
       breakdown.push({ type: "ot", label: "เข้าก่อน 07:00 → OT +1" });
     }
   }
 
-  // ── พักเที่ยง ── (ต้องมีทั้งออกและกลับ)
+  // ── 🆕 วันเสาร์: หยุดแค่นี้ — คิดเฉพาะสายเช้า ไม่แตะเที่ยง/เย็น ──
+  if (isSat) {
+    if (ci !== null) breakdown.push({ type: "info", label: "วันเสาร์ — คิดเฉพาะสายเช้า" });
+    return { lateMin, otHours, breakdown };
+  }
+
+  // ── พักเที่ยง ── (วันธรรมดา, ต้องมีทั้งออกและกลับ)
   if (lo !== null && li !== null) {
     const lunch = li - lo;
     if (lunch < R.LUNCH_SHORT_MIN) {
@@ -108,7 +134,7 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode }) {
     }
   }
 
-  // ── เย็น ──
+  // ── เย็น ── (วันธรรมดา)
   if (co !== null) {
     if (co >= R.OT_EVENING_2_MIN) {
       otHours += 2;
@@ -156,17 +182,32 @@ function parseDate(s) {
 // assignPunches — แปลง punches ดิบ → 4 จุดมาตรฐาน
 //
 // กลยุทธ์:
+//   🆕 วันเสาร์ → สนใจแค่ "เข้าเช้า" (เวลาน้อยสุด) เป็นปกติ ไม่ flag
 //   4 punches (ins=2, outs=2) → ปกติ assign ตรง ไม่ต้อง review
-//   5+ punches (ZKTeco สแกนซ้ำ/เครื่องพัง):
-//     → dedupe ทั้ง ins+outs รวมกัน แล้ว sort เวลา
-//     → เวลาทำงานไม่ข้ามเที่ยงคืน ดังนั้น sort น้อย→มาก
-//       = checkIn < lunchOut < lunchIn < checkOut เสมอ ✅
-//     → ถ้าเหลือ 4 → assign ได้อัตโนมัติ แต่ยัง flag 🟡 ให้ HR ยืนยัน
-//     → ถ้าเหลือ > 4 → ยัง ambiguous → flag 🟡 + reason ให้ HR แก้มือ
+//   5+ punches (ZKTeco สแกนซ้ำ/เครื่องพัง) → dedupe+sort
 //   < 4 punches → ใส่เท่าที่มี + flag 🟡
 // ════════════════════════════════════════════════════════════════
-function assignPunches(ins, outs) {
+function assignPunches(ins, outs, isSat = false) {
   const all = [...ins, ...outs];
+
+  // ── 🆕 วันเสาร์: ครึ่งวัน มีแค่เข้าเช้า ──
+  if (isSat) {
+    if (all.length === 0) {
+      return {
+        checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
+        needsReview: true,
+        reason: "วันเสาร์ — ไม่สแกนเลย (ขาด/ลา?)",
+      };
+    }
+    // เลือกเวลาน้อยสุด = เข้าเช้า ที่เหลือทิ้ง (เสาร์ไม่คิดเที่ยง/เย็น)
+    const sorted = [...new Set(all)].sort();
+    return {
+      checkIn:  sorted[0],
+      lunchOut: null, lunchIn: null, checkOut: null,
+      needsReview: false,
+      reason: "",
+    };
+  }
 
   // ── เคสปกติ: ins=2, outs=2 ──
   if (ins.length === 2 && outs.length === 2) {
@@ -193,13 +234,9 @@ function assignPunches(ins, outs) {
 
   // ── 5+ punch: ZKTeco export ผิด (สแกนซ้ำ/เครื่องค้าง) ──
   if (all.length >= 5) {
-    // dedupe ข้ามทั้ง ins+outs (เช่น "12:01" อยู่ทั้งสองฝั่ง)
-    // แล้ว sort เวลา — ใช้ได้เพราะเวลาทำงานไม่ข้ามเที่ยงคืน
-    // checkIn < lunchOut < lunchIn < checkOut เสมอ
     const clean = [...new Set(all)].sort();
 
     if (clean.length === 4) {
-      // dedupe เหลือพอดี 4 → assign อัตโนมัติ + flag ให้ HR ยืนยัน
       return {
         checkIn:  clean[0],
         lunchOut: clean[1],
@@ -210,7 +247,6 @@ function assignPunches(ins, outs) {
       };
     }
 
-    // dedupe แล้วยังเกิน 4 → ambiguous เกินไป ให้ HR แก้มือ
     return {
       checkIn:  clean[0],
       lunchOut: clean[1],
@@ -280,13 +316,14 @@ export function parseZKTecoCSV(text) {
 
     const ins  = splitTimes(inS);
     const outs = splitTimes(outS);
+    const sat  = isSaturday(date);
 
     rows.push({
       date,
       deviceUid: devUid,
       deviceName: devName,
       empCode,
-      ...assignPunches(ins, outs),
+      ...assignPunches(ins, outs, sat),
     });
   }
 
