@@ -71,11 +71,10 @@ function calcCycleWageForEmployee(record, logsInCycle) {
     l => new Date(l.work_date + "T00:00:00").getDay() !== 0
   ).length;
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
-  // ทาง A: ฐาน net_pay → ไม่ติดลบ
-  const net = record.net_pay != null
-    ? record.net_pay
-    : (record.total_income || 0) - (record.total_deduct || 0);
-  const wage = parseFloat(((net / record.work_days) * workDays).toFixed(2));
+  // ใช้ base_wage เป็นฐาน — จ่ายค่าแรงจริงก่อนหัก
+  // ปกส./ประกันงาน/รายหักอื่น → ดูดในสิ้นเดือน
+  const dailyRate = record.base_wage / record.work_days;
+  const wage = parseFloat((dailyRate * workDays).toFixed(2));
   return { workDays, wage };
 }
 
@@ -615,8 +614,8 @@ function DetailModal({ detail, onClose }) {
             <div style={{ background:"#f8fafc", borderRadius:10, padding:"10px 14px", marginBottom:14,
               border:"1px solid #e2e8f0", fontSize:13 }}>
               <div style={{ fontWeight:700, color:"#374151", marginBottom:8 }}>📐 วิธีคิดรอบนี้</div>
-              <CalcRow label="สุทธิทั้งเดือน" value={fmtInt(net)} unit="บาท" />
-              <CalcRow label={`÷ วันทำงาน (${r.work_days} วัน)`} value={fmt(net / r.work_days)} unit="บาท/วัน" />
+              <CalcRow label="ค่าแรงปกติทั้งเดือน" value={fmtInt(r.base_wage)} unit="บาท" />
+              <CalcRow label={`÷ วันทำงาน (${r.work_days} วัน)`} value={fmt(r.base_wage / r.work_days)} unit="บาท/วัน" />
               <CalcRow label={`× วันทำในรอบนี้ (${detail.workDays} วัน)`} value={fmt(detail.wage)} unit="บาท" highlight />
               {detail.advAmt > 0 && (
                 <>
