@@ -18,9 +18,11 @@ const HR_NOTE_PRESETS = [
 function processAttendance(rows, employees) {
   return rows.map((r) => {
     const emp = employees.find((e) => e.emp_code === r.empCode);
+    // 🆕 ส่ง date เข้าไปด้วย → calcDay รู้ว่าวันไหนเป็นเสาร์ (คิดเฉพาะสายเช้า)
     const { lateMin, otHours } = calcDay({
       checkIn: r.checkIn, lunchOut: r.lunchOut,
       lunchIn: r.lunchIn, checkOut: r.checkOut, empCode: r.empCode,
+      date: r.date,
     });
     return {
       employee_id:     emp?.id || null,
@@ -123,12 +125,14 @@ export default function AttendancePage({ role }) {
     const pm_out = to24h(editValues.scan_pm_out);
 
     const emp = employees.find(e => e.id === editRow.employee_id);
+    // 🆕 ส่ง date (work_date ของแถวนี้) เข้าไป → กฎเสาร์ทำงานตอนกดแก้ด้วย
     const { lateMin, otHours } = calcDay({
       checkIn:  am_in  || null,
       lunchOut: am_out || null,
       lunchIn:  pm_in  || null,
       checkOut: pm_out || null,
       empCode:  emp?.emp_code || "",
+      date:     editRow.work_date,
     });
 
     const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
