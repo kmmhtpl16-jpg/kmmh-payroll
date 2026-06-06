@@ -192,13 +192,16 @@ export default function WeeklyPage({ role }) {
       const builtCycles = buildCyclesFromCalendar(year, month, logDates);
       setCycles(builtCycles);
 
-      // 5. ดึง advance_requests ทั้งเดือน (สำหรับหักในรอบ)
+      // 5. ดึงเบิกเงินสด จาก deductions (type = เบิกเงินสด)
+      //    ข้อมูลจริงอยู่ที่นี่ — advance_requests ว่างเปล่า
+      const ADVANCE_TYPE_ID = "eb37bbd8-3636-4c37-a4dc-59b04a03ac61";
       const { data: adv } = await supabase
-        .from("advance_requests")
-        .select("employee_id, amount, request_date")
+        .from("deductions")
+        .select("employee_id, amount, deduct_date")
+        .eq("deduction_type_id", ADVANCE_TYPE_ID)
         .in("employee_id", empIds)
-        .gte("request_date", dateFrom)
-        .lte("request_date", dateTo);
+        .gte("deduct_date", dateFrom)
+        .lte("deduct_date", dateTo);
 
       setAdvances(adv || []);
 
@@ -244,12 +247,12 @@ export default function WeeklyPage({ role }) {
     );
   }
 
-  // ── เบิกล่วงหน้าในรอบ (ใช้วันที่เบิก) ──
+  // ── เบิกล่วงหน้าในรอบ (ใช้ deduct_date) ──
   function getAdvanceInCycle(empId, cycle) {
     const fromStr = toLocalDateStr(cycle.dateFrom);
     const toStr   = toLocalDateStr(cycle.dateTo);
     return advances
-      .filter(a => a.employee_id === empId && a.request_date >= fromStr && a.request_date <= toStr)
+      .filter(a => a.employee_id === empId && a.deduct_date >= fromStr && a.deduct_date <= toStr)
       .reduce((s, a) => s + parseFloat(a.amount || 0), 0);
   }
 
