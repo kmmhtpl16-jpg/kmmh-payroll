@@ -1,6 +1,13 @@
 // src/WeeklyPage.jsx
 // หน้าสรุปรายจ่ายรายอาทิตย์ — ดึงจาก pay_cycles + payroll_records
 // ต้องกด "คำนวณเงินเดือน" ใน PayrollPage ก่อน จึงจะมีข้อมูล
+//
+// 🔧 v3 — แก้ยอดให้ตรงเป๊ะ:
+//   • รอบเสาร์   = ค่าแรงวันทำในรอบนั้น (จ-ส) − เบิกในรอบ
+//   • สิ้นเดือน  = สุทธิทั้งเดือน (net_pay) − เงินจ่ายเสาร์ทุกรอบ  ← "ส่วนเหลือ"
+//   → รับประกัน: เสาร์ทุกรอบ + สิ้นเดือน = net_pay เป๊ะเสมอ ทุกคน
+//   → ของที่เคยตกหล่น (ตำแหน่ง/หักสาย/รายจ่ายอื่น/เบิกไม่ผูกรอบ เช่น 1,000)
+//     ถูกดูดเข้า "ส่วนเหลือ" อัตโนมัติ → ยอดไม่เพี้ยน + บั๊กเบิกหาย
 
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
@@ -16,10 +23,11 @@ function fmtDate(d) {
   return `${dt.getDate()} ${MONTHS_SHORT[dt.getMonth() + 1]}`;
 }
 
-// คำนวณค่าแรงรอบนี้ = base_wage × (วันทำในรอบ / วันทำทั้งหมด)
+// ค่าแรงรอบนี้ = ค่าแรงเฉลี่ยต่อวันทำ × วันทำในรอบ
+//   ค่าแรงเฉลี่ย/วัน = base_wage ÷ work_days (ทั้งเดือน, ไม่รวมอาทิตย์)
 function calcCycleWage(record, cycleDays) {
-  if (!record) return 0;
-  const dailyRate = record.work_days > 0 ? record.base_wage / record.work_days : 0;
+  if (!record || !record.work_days) return 0;
+  const dailyRate = record.base_wage / record.work_days;
   return parseFloat((dailyRate * cycleDays).toFixed(2));
 }
 
@@ -92,12 +100,14 @@ export default function WeeklyPage({ role }) {
           .select("employee_id, work_date")
           .in("employee_id", empIds)
           .gte("work_date", `${year}-${String(month).padStart(2,"0")}-01`)
-          .lte("work_date", `${year}-${String(month).padStart(2,"0")}-30`);
+          .lte("work_date", `${year}-${String(month).padStart(2,"0")}-31`);
 
+        // นับ "วันทำ" ต่อรอบ — กรองอาทิตย์ออก (อาทิตย์จ่ายสิ้นเดือน)
         const idx = {};
         for (const cyc_ of (cyc || [])) {
           idx[cyc_.id] = {};
           for (const log of (logs || [])) {
+            if (new Date(log.work_date).getDay() === 0) continue; // ข้ามอาทิตย์
             if (log.work_date >= cyc_.date_from && log.work_date <= cyc_.date_to) {
               idx[cyc_.id][log.employee_id] = (idx[cyc_.id][log.employee_id] || 0) + 1;
             }
@@ -144,34 +154,49 @@ export default function WeeklyPage({ role }) {
     setMarkingMonthEnd(false);
   };
 
+  // เงินที่ "จ่ายจริง" ในรอบเสาร์ของคนคนหนึ่ง (รอบเดียว)
+  function calcCycleToPay(cycle, r) {
+    const logMap    = cycleLogs[cycle.id] || {};
+    const cycleDays = logMap[r.employee_id] || 0;
+    const cycleWage = calcCycleWage(r, cycleDays);
+    const advAmt    = advances
+      .filter(a => a.cycle_id === cycle.id && a.employee_id === r.employee_id)
+      .reduce((s, a) => s + parseFloat(a.amount || 0), 0);
+    const toPay = Math.max(0, parseFloat((cycleWage - advAmt).toFixed(2)));
+    return { cycleDays, cycleWage, advAmt, toPay };
+  }
+
+  // แถวในรอบเสาร์ (เฉพาะคนที่ไม่ใช่ "จ่ายสิ้นเดือนล้วน")
   function getCycleRows(cycle) {
-    const logMap = cycleLogs[cycle.id] || {};
     return payrolls
       .filter(r => r.employees?.pay_schedule !== "end_of_month")
-      .map(r => {
-        const cycleDays = logMap[r.employee_id] || 0;
-        const cycleWage = calcCycleWage(r, cycleDays);
-        const advAmt    = advances
-          .filter(a => a.cycle_id === cycle.id && a.employee_id === r.employee_id)
-          .reduce((s, a) => s + parseFloat(a.amount || 0), 0);
-        const toPay = Math.max(0, cycleWage - advAmt);
-        return { record: r, cycleDays, cycleWage, advAmt, toPay };
-      })
+      .map(r => ({ record: r, ...calcCycleToPay(cycle, r) }))
       .filter(row => row.cycleDays > 0 || row.advAmt > 0);
   }
 
-  // คำนวณยอดสิ้นเดือนรายคน
-  // ใช้ month_end_pay จาก payrollCalc โดยตรง (แหล่งความจริงเดียว)
-  // ไม่ครอบ Math.max → ถ้าติดลบให้แสดงตามจริง คนดูจะได้รู้ว่าค่าอาทิตย์ยังไม่ครบ
-  // สูตร = เบี้ยขยัน + OT + ค่าอาทิตย์ − ปกส. − ประกันงาน
+  // ผลรวมเงินจ่ายเสาร์ทุกรอบของคนคนหนึ่ง (ทั้งเดือน)
+  function getEmpSaturdayTotal(r) {
+    if (r.employees?.pay_schedule === "end_of_month") return 0;
+    return cycles.reduce((sum, c) => sum + calcCycleToPay(c, r).toPay, 0);
+  }
+
+  // 🔑 สิ้นเดือน = สุทธิทั้งเดือน − เงินจ่ายเสาร์ทุกรอบ (ส่วนเหลือ)
+  //    รับประกัน: เสาร์ + สิ้นเดือน = net_pay เป๊ะ
   function getMonthEndPay(r) {
-    if (r.month_end_pay != null) return r.month_end_pay;
-    // fallback กรณี record เก่ายังไม่มี field นี้
-    return (r.diligence_bonus||0) + (r.ot_amount||0) + (r.holiday_wage||0)
-         - (r.social_security||0) - (r.job_insurance||0);
+    const net = r.net_pay != null
+      ? r.net_pay
+      : (r.total_income || 0) - (r.total_deduct || 0);
+    return parseFloat((net - getEmpSaturdayTotal(r)).toFixed(2));
   }
 
   const monthEndTotal = payrolls.reduce((sum, r) => sum + getMonthEndPay(r), 0);
+
+  // ── ตัวเลขตรวจสอบ: เสาร์รวมทุกรอบ + สิ้นเดือน = สุทธิรวม ──
+  const allSaturdayTotal = payrolls.reduce((sum, r) => sum + getEmpSaturdayTotal(r), 0);
+  const allNetTotal      = payrolls.reduce((sum, r) =>
+    sum + (r.net_pay != null ? r.net_pay : (r.total_income||0)-(r.total_deduct||0)), 0);
+  const grandPayTotal    = allSaturdayTotal + monthEndTotal;
+  const isBalanced       = Math.abs(grandPayTotal - allNetTotal) < 1; // เผื่อปัดเศษ
 
   return (
     <div style={s.page}>
@@ -190,10 +215,29 @@ export default function WeeklyPage({ role }) {
 
       {loading && <p style={{ color:"#6b7280", textAlign:"center", padding:32 }}>⏳ กำลังโหลด...</p>}
 
+      {/* ── แถบตรวจยอด: เสาร์ + สิ้นเดือน = สุทธิ ── */}
+      {!loading && payrolls.length > 0 && (
+        <div style={{
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          flexWrap:"wrap", gap:8, padding:"10px 16px", borderRadius:10, marginBottom:14,
+          background: isBalanced ? "#f0fdf4" : "#fef2f2",
+          border: `1px solid ${isBalanced ? "#86efac" : "#fca5a5"}`,
+        }}>
+          <span style={{ fontWeight:700, fontSize:14, color: isBalanced ? "#166534" : "#991b1b" }}>
+            {isBalanced ? "✅ ยอดตรง" : "❌ ยอดไม่ตรง — ตรวจสอบ"}
+          </span>
+          <span style={{ fontSize:13, color:"#475569" }}>
+            เสาร์รวม <b>{fmtInt(allSaturdayTotal)}</b> + สิ้นเดือน <b>{fmtInt(monthEndTotal)}</b>
+            {" = "}<b>{fmtInt(grandPayTotal)}</b>
+            {"  |  สุทธิทั้งเดือน "}<b>{fmtInt(allNetTotal)}</b>
+          </span>
+        </div>
+      )}
+
       {/* ── รอบเสาร์ ── */}
       {!loading && cycles.map((cycle, ci) => {
         const rows     = getCycleRows(cycle);
-        const totalPay = rows.reduce((s, r) => s + r.toPay, 0);
+        const totalPay = rows.reduce((sum, r) => sum + r.toPay, 0);
 
         return (
           <div key={cycle.id} style={{ ...s.cycleCard, opacity: cycle.is_paid ? 0.75 : 1 }}>
@@ -288,9 +332,7 @@ export default function WeeklyPage({ role }) {
         );
       })}
 
-      {/* ══ Section จ่ายเงินเดือนพนักงาน - สิ้นเดือน ══
-          โผล่ตลอด ไม่ขึ้นกับ payrolls.length
-          ถ้ายังไม่คำนวณ → แสดง banner แจ้ง                    */}
+      {/* ══ Section จ่ายเงินเดือนพนักงาน - สิ้นเดือน ══ */}
       {!loading && (
         <div style={{
           ...s.cycleCard,
@@ -300,7 +342,7 @@ export default function WeeklyPage({ role }) {
           <div style={{ ...s.cycleHeader, background:"#4c1d95" }}>
             <div>
               <span style={s.cycleLabel}>💜 จ่ายเงินเดือนพนักงาน - สิ้นเดือน</span>
-              <span style={s.cycleDates}>เบี้ยขยัน · อาทิตย์ · OT · หักปกส. · ประกันงาน</span>
+              <span style={s.cycleDates}>ส่วนที่เหลือ = สุทธิทั้งเดือน − จ่ายเสาร์แล้ว</span>
             </div>
             {period?.is_month_end_paid
               ? <span style={s.paidBadge}>✅ จ่ายแล้ว</span>
@@ -308,7 +350,6 @@ export default function WeeklyPage({ role }) {
             }
           </div>
 
-          {/* ยังไม่มีผลคำนวณ */}
           {payrolls.length === 0 ? (
             <p style={{ color:"#9ca3af", padding:"16px", fontSize:13, textAlign:"center" }}>
               ⚠️ ยังไม่มีผลคำนวณ — กรุณากด "คำนวณเงินเดือน" ในแท็บ 💰 เงินเดือน ก่อน
@@ -318,7 +359,7 @@ export default function WeeklyPage({ role }) {
               <table style={s.table}>
                 <thead>
                   <tr>
-                    {["ชื่อ","รอบจ่าย","เบี้ยขยัน","อาทิตย์(วัน)","ค่าอาทิตย์","OT(ชม.)","ค่า OT","ปกส.","ประกันงาน","จ่ายสิ้นเดือน",""].map(h => (
+                    {["ชื่อ","รอบจ่าย","สุทธิทั้งเดือน","จ่ายเสาร์แล้ว","จ่ายสิ้นเดือน",""].map(h => (
                       <th key={h} style={s.th}>{h}</th>
                     ))}
                   </tr>
@@ -326,6 +367,8 @@ export default function WeeklyPage({ role }) {
                 <tbody>
                   {payrolls.map(r => {
                     const isME      = r.employees?.pay_schedule === "end_of_month";
+                    const net       = r.net_pay != null ? r.net_pay : (r.total_income||0)-(r.total_deduct||0);
+                    const satTotal  = getEmpSaturdayTotal(r);
                     const monthPay  = getMonthEndPay(r);
                     return (
                       <tr key={r.employee_id} style={s.tr}>
@@ -341,16 +384,9 @@ export default function WeeklyPage({ role }) {
                             {isME ? "💜 สิ้นเดือน" : "🔵 รายเสาร์"}
                           </span>
                         </td>
-                        <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.diligence_bonus)}</td>
-                        <td style={{ ...s.td, textAlign:"right" }}>{r.holiday_days || 0} วัน</td>
-                        <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.holiday_wage)}</td>
-                        <td style={{ ...s.td, textAlign:"right" }}>{r.ot_hours || 0} ชม.</td>
-                        <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.ot_amount)}</td>
-                        <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>
-                          {r.social_security > 0 ? `(${fmt(r.social_security)})` : "—"}
-                        </td>
-                        <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>
-                          {r.job_insurance > 0 ? `(${fmt(r.job_insurance)})` : "—"}
+                        <td style={{ ...s.td, textAlign:"right" }}>{fmtInt(net)}</td>
+                        <td style={{ ...s.td, textAlign:"right", color: satTotal>0?"#0ea5e9":"#9ca3af" }}>
+                          {satTotal>0 ? `(${fmtInt(satTotal)})` : "—"}
                         </td>
                         <td style={{ ...s.td, textAlign:"right",
                           fontWeight:700, fontSize:15, color:"#4c1d95" }}>
@@ -358,18 +394,8 @@ export default function WeeklyPage({ role }) {
                         </td>
                         <td style={{ ...s.td, textAlign:"center" }}>
                           <button
-                            onClick={() => setDetail({
-                              record: r,
-                              cycleWage: isME
-                                ? (r.base_wage||0)+(r.holiday_wage||0)+(r.ot_amount||0)
-                                : (r.diligence_bonus||0)+(r.holiday_wage||0)+(r.ot_amount||0),
-                              advAmt: isME
-                                ? (r.late_deduct||0)+(r.social_security||0)+(r.job_insurance||0)+(r.other_deduct||0)+(r.advance_total||0)
-                                : (r.social_security||0)+(r.job_insurance||0),
-                              toPay: monthPay,
-                              cycleDays: r.holiday_days || 0,
-                              isMonthEnd: true,
-                            })}
+                            onClick={() => setDetail({ record: r, toPay: monthPay,
+                              satTotal, isMonthEnd: true })}
                             style={s.glassBtn} title="ดูรายละเอียด">🔍</button>
                         </td>
                       </tr>
@@ -378,8 +404,12 @@ export default function WeeklyPage({ role }) {
                 </tbody>
                 <tfoot>
                   <tr style={{ background:"#f5f3ff" }}>
-                    <td style={s.td} colSpan={9}>
-                      <span style={{ fontWeight:700, color:"#4c1d95" }}>รวมที่ต้องจ่ายสิ้นเดือน</span>
+                    <td style={s.td} colSpan={2}>
+                      <span style={{ fontWeight:700, color:"#4c1d95" }}>รวม</span>
+                    </td>
+                    <td style={{ ...s.td, textAlign:"right", fontWeight:700 }}>{fmtInt(allNetTotal)}</td>
+                    <td style={{ ...s.td, textAlign:"right", fontWeight:700, color:"#0ea5e9" }}>
+                      ({fmtInt(allSaturdayTotal)})
                     </td>
                     <td style={{ ...s.td, textAlign:"right",
                       fontWeight:800, fontSize:17, color:"#4c1d95" }}>
@@ -428,13 +458,25 @@ export default function WeeklyPage({ role }) {
 
             <div style={s.modalBody}>
               <div style={s.cycleBox}>
-                <span style={{ fontWeight:700, color:"#1e3a5f" }}>
-                  {detail.isMonthEnd ? "สิ้นเดือนนี้จ่าย" : `รอบนี้จ่าย (${detail.cycleDays} วัน)`}
+                <span style={{ fontWeight:700, color: detail.isMonthEnd ? "#4c1d95" : "#1e3a5f" }}>
+                  {detail.isMonthEnd ? "💜 จ่ายสิ้นเดือน" : `🔵 จ่ายรอบนี้ (${detail.cycleDays} วัน)`}
                 </span>
-                <span style={{ fontWeight:800, fontSize:20, color:"#1e3a5f" }}>
+                <span style={{ fontWeight:800, fontSize:20,
+                  color: detail.isMonthEnd ? "#4c1d95" : "#1e3a5f" }}>
                   {fmtInt(detail.toPay)} บาท
                 </span>
               </div>
+
+              {/* กรณีสิ้นเดือน: แสดงที่มาของส่วนเหลือ */}
+              {detail.isMonthEnd && (
+                <div style={s.calcBox}>
+                  <MiniRow label="สุทธิทั้งเดือน"
+                    value={fmtInt(detail.record.net_pay != null ? detail.record.net_pay
+                      : (detail.record.total_income||0)-(detail.record.total_deduct||0))} />
+                  <MiniRow label="− จ่ายเสาร์ไปแล้ว" value={`(${fmtInt(detail.satTotal)})`} red />
+                  <MiniRow label="= ส่วนเหลือสิ้นเดือน" value={fmtInt(detail.toPay)} bold green />
+                </div>
+              )}
 
               <div style={s.divider} />
 
@@ -442,7 +484,7 @@ export default function WeeklyPage({ role }) {
               {[
                 ["ค่าแรงปกติ",          fmt(detail.record.base_wage)],
                 ["ค่าแรงวันอาทิตย์",    fmt(detail.record.holiday_wage)],
-                [`OT`,                  `${detail.record.ot_hours} ชม. = ${fmt(detail.record.ot_amount)}`],
+                [`OT`,                  `${detail.record.ot_hours || 0} ชม. = ${fmt(detail.record.ot_amount)}`],
                 ["เงินประจำตำแหน่ง",   fmt(detail.record.position_allowance)],
                 ["เบี้ยขยัน",           fmt(detail.record.diligence_bonus)],
               ].map(([k,v]) => <MiniRow key={k} label={k} value={v} />)}
@@ -452,7 +494,7 @@ export default function WeeklyPage({ role }) {
 
               <p style={s.sectionTitle}>📉 รายหักทั้งเดือน</p>
               {[
-                ["สาย",                 `${detail.record.late_minutes} น. = ${fmt(detail.record.late_deduct)}`],
+                ["สาย",                 `${detail.record.late_minutes || 0} น. = ${fmt(detail.record.late_deduct)}`],
                 ["ประกันสังคม (5%)",    fmt(detail.record.social_security)],
                 ["ประกันงาน",           fmt(detail.record.job_insurance)],
                 ["รายจ่ายพนักงาน",     fmt(detail.record.other_deduct)],
@@ -544,6 +586,8 @@ const s = {
   cycleBox: { display:"flex", justifyContent:"space-between", alignItems:"center",
     padding:"10px 14px", background:"#eff6ff", borderRadius:10,
     border:"2px solid #bfdbfe", marginBottom:12 },
+  calcBox: { background:"#faf5ff", border:"1px solid #e9d5ff", borderRadius:10,
+    padding:"8px 12px", marginBottom:8 },
   divider:     { borderTop:"2px solid #f1f5f9", margin:"12px 0" },
   sectionTitle:{ margin:"4px 0 6px", fontWeight:700, fontSize:14, color:"#1e3a5f" },
   netBox: { display:"flex", justifyContent:"space-between", alignItems:"center",
