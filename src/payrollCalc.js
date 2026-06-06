@@ -106,6 +106,7 @@ export async function calcPayroll(year, month) {
   });
 
   // ── ดึง deductions (รายจ่ายพนักงาน) ──
+  // ⚠️ ตารางชื่อ "deductions" (ตรงกับหน้า DeductionsPage ที่บันทึก)
   const { data: deductions } = await supabase
     .from("deductions")
     .select("*, deduction_types(name)")
