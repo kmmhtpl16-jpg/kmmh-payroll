@@ -1,13 +1,17 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v3
+// คำนวณเงินเดือน KMMH — v4
 // Logic ตาม KMMH_payroll_logic_v2.md
 //
-// 🔧 v3 เปลี่ยนจาก v2:
-//   • หน้าเงินเดือน = ยอดรวมทั้งเดือน (ไม่แยกเสาร์/สิ้นเดือนแล้ว)
-//   • เอา saturday_pay / month_end_pay ออก — ให้หน้าจ่ายเงินคิดเอง
-//     โดยใช้สูตร: สิ้นเดือน = net_pay − เงินจ่ายเสาร์ทุกรอบ (ส่วนเหลือ)
-//     → รับประกัน เสาร์ + สิ้นเดือน = net_pay เป๊ะเสมอ
+// 🔧 v4 เปลี่ยนจาก v3:
+//   • ค่าแรงวันอาทิตย์ (holiday_wage) — นับอาทิตย์ทั้งเดือนจาก "ปฏิทิน"
+//     ไม่ใช่จาก attendance_logs (เพราะอาทิตย์ร้านหยุด ไม่มีบันทึกเวลา)
+//   • holiday_wage เฉพาะพนักงาน "ประจำ" เท่านั้น — ทดลองงานไม่ได้
+//   • เข้าประจำกลางเดือน → นับเฉพาะอาทิตย์ตั้งแต่วันเข้าประจำเป็นต้นไป
+//
+// 🔧 v3 (เดิม):
+//   • หน้าเงินเดือน = ยอดรวมทั้งเดือน (ไม่แยกเสาร์/สิ้นเดือน)
+//   • สิ้นเดือน = net_pay − เงินจ่ายเสาร์ทุกรอบ (ส่วนเหลือ)
 // ─────────────────────────────────────────────────────────────
 
 import { supabase } from "./supabaseClient";
@@ -25,6 +29,18 @@ function daysInMonth(year, month) {
 
 function isSunday(dateStr) {
   return new Date(dateStr).getDay() === 0;
+}
+
+// นับวันอาทิตย์ในเดือนจากปฏิทิน (ตั้งแต่ fromDay ถึงสิ้นเดือน)
+//   fromDay = 1 → ทั้งเดือน
+//   fromDay > 1 → กรณีเข้าประจำกลางเดือน เริ่มนับจากวันนั้น
+function countSundays(year, month, fromDay = 1) {
+  const days = daysInMonth(year, month);
+  let count = 0;
+  for (let d = fromDay; d <= days; d++) {
+    if (new Date(year, month - 1, d).getDay() === 0) count++;
+  }
+  return count;
 }
 
 // หักสายรายวัน (logic v2)
@@ -54,13 +70,6 @@ function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
 function calcSocialSecurity(empType, base) {
   if (empType !== "permanent") return 0;
   return Math.min(parseFloat((base * 0.05).toFixed(2)), 875);
-}
-
-// helper: เลือก rate สำหรับ holiday_wage
-function usePermRate(emp, permStart, dateFrom) {
-  if (emp.emp_type !== "permanent") return false;
-  if (!permStart) return true;
-  return permStart <= dateFrom; // เข้าประจำก่อนต้นเดือน = ใช้ perm rate ทั้งเดือน
 }
 
 // ════════════════════════════════════════════════════════════
@@ -106,7 +115,6 @@ export async function calcPayroll(year, month) {
   });
 
   // ── ดึง deductions (รายจ่ายพนักงาน) ──
-  // ⚠️ ตารางชื่อ "deductions" (ตรงกับหน้า DeductionsPage ที่บันทึก)
   const { data: deductions } = await supabase
     .from("deductions")
     .select("*, deduction_types(name)")
@@ -141,7 +149,6 @@ export async function calcPayroll(year, month) {
       permStart >= dateFrom && permStart <= dateTo;
 
     let work_days    = 0;
-    let holiday_days = 0;
     let ot_hours     = 0;
     let late_minutes = 0;
     let late_deduct  = 0;
@@ -153,12 +160,9 @@ export async function calcPayroll(year, month) {
     for (const log of empLogs) {
       if (log.needs_hr_review) has_review = true;
 
-      const isHoliday = isSunday(log.work_date);
-
-      if (isHoliday) {
-        holiday_days += 1;
-        continue;
-      }
+      // อาทิตย์ไม่มี log จริง (ร้านหยุด) — แต่กันเผื่อมีหลุดมา ก็ข้าม ไม่นับซ้ำ
+      // ค่าแรงอาทิตย์คิดจากปฏิทินด้านล่างแทน
+      if (isSunday(log.work_date)) continue;
 
       // เลือก daily rate ของวันนี้
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
@@ -170,8 +174,7 @@ export async function calcPayroll(year, month) {
       if (usePerm) perm_base  += dayRate;
       else         trial_base += dayRate;
 
-      // late — หมายเหตุ: late_minutes ของวันเสาร์ (เฉพาะสายเช้า) คิดมาจาก
-      //   attendanceLogic.js แล้ว เราใช้ค่าตรงนี้ตามจริง
+      // late — late_minutes วันเสาร์ (เฉพาะสายเช้า) คิดมาจาก attendanceLogic.js แล้ว
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
       const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
@@ -187,13 +190,24 @@ export async function calcPayroll(year, month) {
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
 
-    const base_wage    = parseFloat((trial_base + perm_base).toFixed(2));
-    const daily_rate   = parseFloat(dailyPerm.toFixed(2));
-    const hourly_rate  = parseFloat((daily_rate / 8).toFixed(2));
-    const holiday_wage = parseFloat((
-      (usePermRate(emp, permStart, dateFrom) ? dailyPerm : dailyTrial) * holiday_days
-    ).toFixed(2));
-    const ot_amount    = parseFloat((hourly_rate * ot_hours).toFixed(2));
+    const base_wage   = parseFloat((trial_base + perm_base).toFixed(2));
+    const daily_rate  = parseFloat(dailyPerm.toFixed(2));
+    const hourly_rate = parseFloat((daily_rate / 8).toFixed(2));
+
+    // ── ค่าแรงวันอาทิตย์ (v4) ──
+    //   นับอาทิตย์จากปฏิทิน เฉพาะประจำเท่านั้น
+    //   เข้าประจำกลางเดือน → นับเฉพาะอาทิตย์ตั้งแต่วันเข้าประจำ
+    let holiday_days = 0;
+    let holiday_wage = 0;
+    if (isPerm) {
+      const fromDay = permStartInMonth
+        ? parseInt(permStart.slice(8, 10), 10) // วันที่ของ permanent_start_date
+        : 1;
+      holiday_days = countSundays(year, month, fromDay);
+      holiday_wage = parseFloat((dailyPerm * holiday_days).toFixed(2));
+    }
+
+    const ot_amount = parseFloat((hourly_rate * ot_hours).toFixed(2));
 
     const position_allowance = parseFloat(emp.position_allowance || 0);
     const diligence_bonus    = calcDiligenceBonus(late_minutes, has_leave, emp.emp_type);
