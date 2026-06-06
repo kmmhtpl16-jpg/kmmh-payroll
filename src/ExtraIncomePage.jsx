@@ -1,75 +1,74 @@
-// ExtraIncomePage.jsx
+// src/ExtraIncomePage.jsx
 // หน้าบันทึกรายได้พิเศษ (OT / เงินประจำตำแหน่ง / อื่นๆ) — KMMH Payroll
-// วางที่ src/ExtraIncomePage.jsx
+// ทรงเดียวกับ DeductionsPage แต่โทนเขียว (รายได้ = เงินเข้า)
 // เพิ่มแท็บใน App.jsx:
 //   import ExtraIncomePage from "./ExtraIncomePage";
 //   { id: "extra", label: "➕ รายได้พิเศษ" },
 //   {activeTab === "extra" && <ExtraIncomePage role={role} />}
 
 import { useState, useEffect } from "react";
-import { supabase } from "./supabase"; // ← ปรับ path ตาม project
+import { supabase } from "./supabaseClient";
 
-// ── Constants ────────────────────────────────────────────────────
-const TYPE_CONFIG = {
-  ot: {
-    label: "OT",
-    icon: "⏰",
-    color: "#b45309", bg: "#fffbeb", border: "#fde68a",
-    auto: true, // ดึงยอดจากระบบ
-  },
-  position_allowance: {
-    label: "เงินประจำตำแหน่ง",
-    icon: "🏅",
-    color: "#0f766e", bg: "#f0fdfa", border: "#99f6e4",
-    auto: true,
-  },
-  other: {
-    label: "อื่นๆ",
-    icon: "✏️",
-    color: "#6d28d9", bg: "#faf5ff", border: "#e9d5ff",
-    auto: false,
-  },
-};
+const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const DISBURSE_OPTS = [
-  { value: "saturday",  label: "💸 รอบเสาร์" },
-  { value: "month_end", label: "📅 สิ้นเดือน" },
-  { value: null,        label: "⏳ ยังไม่กำหนด" },
+// ── โทนเขียว ──
+const GREEN = "#16a34a";
+const GREEN_DARK = "#15803d";
+const GREEN_BG = "#f0fdf4";
+const GREEN_BORDER = "#bbf7d0";
+
+// ประเภทรายได้พิเศษ (fixed 3 แบบ — ไม่เพิ่มเองเหมือน deduction)
+const INCOME_TYPES = [
+  { value: "ot",                 label: "⏰ OT",                 auto: true },
+  { value: "position_allowance", label: "🏅 เงินประจำตำแหน่ง",  auto: true },
+  { value: "other",              label: "✏️ อื่นๆ",             auto: false },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────
-function fmtBaht(n) {
-  return Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// รอบจ่าย (card ใหญ่ 2 อัน เหมือน CYCLE_OPTIONS ของ DeductionsPage)
+const CYCLE_OPTIONS = [
+  { value: "saturday",  label: "🗓 วันเสาร์",  desc: "จ่ายรอบเสาร์ถัดไปที่ยังไม่ปิด" },
+  { value: "month_end", label: "📅 สิ้นเดือน", desc: "จ่ายตอนปิดงวดสิ้นเดือน" },
+];
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function disburseLabel(v) {
-  const o = DISBURSE_OPTS.find((x) => x.value === v);
-  return o ? o.label : "⏳ ยังไม่กำหนด";
-}
-
-// ── Component ─────────────────────────────────────────────────────
 export default function ExtraIncomePage({ role }) {
   const canEdit = role === "owner" || role === "hr";
 
-  const [periods, setPeriods] = useState([]);
-  const [periodId, setPeriodId] = useState("");
+  const [periods,   setPeriods]   = useState([]);
+  const [periodId,  setPeriodId]  = useState("");
   const [employees, setEmployees] = useState([]);
-  const [empId, setEmpId] = useState("");
+  const [entries,   setEntries]   = useState([]); // รายการทุกคนในงวด
+  const [loading,   setLoading]   = useState(false);
 
-  const [entries, setEntries] = useState([]);   // รายการของคนที่เลือก
-  const [otFromSystem, setOtFromSystem] = useState(null); // {hours, amount}
-  const [posFromSystem, setPosFromSystem] = useState(0);  // ค่า default ประจำตำแหน่ง
-  const [nextCycle, setNextCycle] = useState(null); // รอบเสาร์ถัดไปที่ยังไม่ปิด
+  // cache ยอดจากระบบ ราย employee_id → {ot:{hours,amount}|null}
+  const [sysCache, setSysCache] = useState({});
+  const [nextCycle, setNextCycle] = useState(null);
 
-  const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
+  // ── form state เดียวรวม (เหมือน DeductionsPage) ──
+  const [form, setForm] = useState({
+    employee_id: "",
+    income_type: "",
+    amount:      "",
+    label:       "",
+    note:        "",
+    entry_date:  todayStr(),
+    disburse_on: "month_end",
+    _systemAmount: null, // เก็บไว้เทียบว่า override ไหม
+  });
+  const [saving, setSaving] = useState(false);
+  const [msg,    setMsg]    = useState(null);
 
-  // form state สำหรับเพิ่มรายการ
-  const [form, setForm] = useState(null); // {income_type, label, amount, disburse_on, is_overridden, override_reason}
+  // ── แก้ไข inline ──
+  const [editRow,  setEditRow]  = useState(null);
+  const [editVals, setEditVals] = useState({});
 
-  function showToast(msg, type = "ok") {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
+  function flash(text, type = "ok") {
+    setMsg({ text, type });
+    setTimeout(() => setMsg(null), 3000);
   }
 
   // ── โหลด periods + employees ครั้งแรก ──
@@ -85,413 +84,391 @@ export default function ExtraIncomePage({ role }) {
 
       const { data: emps } = await supabase
         .from("employees")
-        .select("id, nickname, full_name, emp_code, emp_type, position_allowance")
+        .select("id, nickname, emp_code, emp_type, position_allowance")
         .eq("is_active", true)
         .order("emp_code");
       setEmployees(emps || []);
     })();
   }, []);
 
-  // ── เมื่อเลือก period → หา cycle เสาร์ถัดไปที่ยังไม่ปิด ──
+  // ── เมื่อเปลี่ยน period → โหลดรายการ + หา cycle เสาร์ถัดไป ──
   useEffect(() => {
     if (!periodId) return;
+    loadEntries();
     (async () => {
-      const { data: cycles } = await supabase
+      const { data: cyc } = await supabase
         .from("pay_cycles")
         .select("id, cycle_date, is_paid")
         .eq("period_id", periodId)
         .eq("is_paid", false)
         .order("cycle_date", { ascending: true })
         .limit(1);
-      setNextCycle(cycles && cycles.length ? cycles[0] : null);
+      setNextCycle(cyc && cyc.length ? cyc[0] : null);
     })();
   }, [periodId]);
 
-  // ── เมื่อเลือกพนักงาน → โหลดรายการ + ยอดจากระบบ ──
-  useEffect(() => {
-    if (!empId || !periodId) {
-      setEntries([]);
-      setOtFromSystem(null);
-      setPosFromSystem(0);
-      return;
-    }
-    loadEmpData();
-  }, [empId, periodId]);
-
-  async function loadEmpData() {
+  async function loadEntries() {
     setLoading(true);
-
-    // รายการที่บันทึกไว้แล้ว
-    const { data: ents } = await supabase
+    const { data } = await supabase
       .from("extra_income_entries")
       .select("*")
-      .eq("employee_id", empId)
       .eq("period_id", periodId)
-      .order("created_at", { ascending: true });
-    setEntries(ents || []);
-
-    // ยอด OT จากระบบ (payroll_records)
-    const { data: pr } = await supabase
-      .from("payroll_records")
-      .select("ot_hours, ot_amount")
-      .eq("employee_id", empId)
-      .eq("period_id", periodId)
-      .maybeSingle();
-    setOtFromSystem(pr ? { hours: pr.ot_hours, amount: pr.ot_amount } : null);
-
-    // ค่า default เงินประจำตำแหน่ง
-    const emp = employees.find((e) => e.id === empId);
-    setPosFromSystem(emp ? Number(emp.position_allowance || 0) : 0);
-
+      .order("created_at", { ascending: false });
+    setEntries(data || []);
     setLoading(false);
   }
 
-  // ── เปิดฟอร์มตามประเภท ──
-  function openForm(type) {
-    // กัน OT / ประจำตำแหน่ง ซ้ำ
-    if (type !== "other" && entries.some((e) => e.income_type === type)) {
-      showToast(`มี${TYPE_CONFIG[type].label}ของคนนี้แล้วในเดือนนี้`, "warn");
+  // ── ดึงยอดจากระบบเมื่อเลือกคน + ประเภท auto ──
+  async function fetchSystemAmount(empId, type) {
+    if (type === "ot") {
+      if (sysCache[empId]?.ot !== undefined) return sysCache[empId].ot;
+      const { data: pr } = await supabase
+        .from("payroll_records")
+        .select("ot_hours, ot_amount")
+        .eq("employee_id", empId)
+        .eq("period_id", periodId)
+        .maybeSingle();
+      const ot = pr ? { hours: pr.ot_hours, amount: Number(pr.ot_amount || 0) } : null;
+      setSysCache((c) => ({ ...c, [empId]: { ...c[empId], ot } }));
+      return ot;
+    }
+    if (type === "position_allowance") {
+      const emp = employees.find((e) => e.id === empId);
+      return { amount: Number(emp?.position_allowance || 0) };
+    }
+    return null;
+  }
+
+  // ── เมื่อเลือกคน หรือ ประเภท → auto-fill ยอด ──
+  async function onPickEmployee(empId) {
+    setForm((f) => ({ ...f, employee_id: empId }));
+    if (empId && form.income_type) await applyAuto(empId, form.income_type);
+  }
+  async function onPickType(type) {
+    setForm((f) => ({ ...f, income_type: type, label: type === "other" ? f.label : "" }));
+    if (form.employee_id && type) await applyAuto(form.employee_id, type);
+  }
+
+  async function applyAuto(empId, type) {
+    if (type === "other") {
+      setForm((f) => ({ ...f, amount: "", note: "", _systemAmount: null }));
       return;
     }
-
-    let amount = 0, note = "";
+    const sys = await fetchSystemAmount(empId, type);
     if (type === "ot") {
-      if (!otFromSystem) {
-        showToast("ยังไม่มีข้อมูล OT เดือนนี้ (ต้องคำนวณเวลาก่อน)", "warn");
+      if (!sys) {
+        setForm((f) => ({ ...f, amount: "", note: "", _systemAmount: null }));
+        flash("ยังไม่มีข้อมูล OT เดือนนี้ (ต้องคำนวณเวลาก่อน)", "warn");
         return;
       }
-      amount = Number(otFromSystem.amount || 0);
-      note = `${otFromSystem.hours} ชม.`;
-    } else if (type === "position_allowance") {
-      amount = posFromSystem;
-      note = "ค่าประจำตำแหน่งตามที่ตั้งไว้";
+      setForm((f) => ({ ...f, amount: String(sys.amount), note: `${sys.hours} ชม.`, _systemAmount: sys.amount }));
+    } else {
+      setForm((f) => ({ ...f, amount: String(sys.amount), note: "ค่าประจำตำแหน่งตามที่ตั้งไว้", _systemAmount: sys.amount }));
     }
-
-    setForm({
-      income_type: type,
-      label: type === "other" ? "" : TYPE_CONFIG[type].label,
-      amount,
-      amount_note: note,
-      disburse_on: "month_end", // default สิ้นเดือน
-      is_overridden: false,
-      override_reason: "",
-      _systemAmount: amount, // เก็บไว้เทียบว่าแก้หรือไม่
-    });
   }
 
   // ── บันทึก ──
-  async function saveEntry() {
-    if (!form) return;
-    if (form.income_type === "other" && !form.label.trim()) {
-      showToast("กรุณาใส่ชื่อรายการ", "warn");
-      return;
-    }
-    if (Number(form.amount) < 0) {
-      showToast("จำนวนเงินต้องไม่ติดลบ", "warn");
-      return;
+  async function save() {
+    if (!form.employee_id) return flash("เลือกพนักงานก่อน", "warn");
+    if (!form.income_type) return flash("เลือกประเภทก่อน", "warn");
+    if (form.income_type === "other" && !form.label.trim()) return flash("ใส่ชื่อรายการ", "warn");
+    if (form.amount === "" || Number(form.amount) < 0) return flash("จำนวนเงินไม่ถูกต้อง", "warn");
+
+    // กัน OT / ประจำตำแหน่ง ซ้ำ
+    if (form.income_type !== "other") {
+      const dup = entries.some((e) => e.employee_id === form.employee_id && e.income_type === form.income_type);
+      if (dup) return flash(`มี${form.income_type === "ot" ? "OT" : "เงินประจำตำแหน่ง"}ของคนนี้แล้วในเดือนนี้`, "warn");
     }
 
-    // ถ้าเสาร์ → ผูก cycle ถัดไปที่ยังไม่ปิด
     let cycleId = null;
     if (form.disburse_on === "saturday") {
-      if (!nextCycle) {
-        showToast("ไม่มีรอบเสาร์ที่เปิดอยู่ — เลือกสิ้นเดือนแทน หรือเปิดรอบก่อน", "warn");
-        return;
-      }
+      if (!nextCycle) return flash("ไม่มีรอบเสาร์ที่เปิดอยู่ — เลือกสิ้นเดือนแทน", "warn");
       cycleId = nextCycle.id;
     }
 
-    // เช็คว่า OT/ประจำตำแหน่ง ถูกแก้จากระบบไหม
     const overridden =
       form.income_type !== "other" &&
+      form._systemAmount !== null &&
       Number(form.amount) !== Number(form._systemAmount);
 
+    setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
-
-    const payload = {
-      employee_id: empId,
-      period_id: periodId,
+    const { error } = await supabase.from("extra_income_entries").insert({
+      employee_id: form.employee_id,
+      period_id:   periodId,
       income_type: form.income_type,
-      label: form.income_type === "other" ? form.label.trim() : null,
-      amount: Number(form.amount),
-      amount_note: form.amount_note || null,
+      label:       form.income_type === "other" ? form.label.trim() : null,
+      amount:      Number(form.amount),
+      amount_note: form.note || null,
       disburse_on: form.disburse_on,
-      cycle_id: cycleId,
-      is_overridden: overridden,
-      override_reason: overridden ? (form.override_reason || "แก้จากระบบ") : null,
-      created_by: user?.id || null,
-      updated_at: new Date().toISOString(),
-    };
+      cycle_id:    cycleId,
+      is_overridden:   overridden,
+      override_reason: overridden ? "แก้จากระบบ" : null,
+      created_by:  user?.id || null,
+      updated_at:  new Date().toISOString(),
+    });
+    setSaving(false);
 
-    const { error } = await supabase.from("extra_income_entries").insert(payload);
-    if (error) {
-      showToast("บันทึกไม่สำเร็จ: " + error.message, "err");
-      return;
-    }
-    showToast("บันทึกแล้ว ✓");
-    setForm(null);
-    loadEmpData();
+    if (error) return flash("บันทึกไม่สำเร็จ: " + error.message, "err");
+    flash("บันทึกแล้ว ✓");
+    setForm({ employee_id: "", income_type: "", amount: "", label: "", note: "", entry_date: todayStr(), disburse_on: "month_end", _systemAmount: null });
+    loadEntries();
   }
 
   // ── ลบ ──
-  async function deleteEntry(id) {
+  async function del(id) {
     if (!confirm("ลบรายการนี้?")) return;
     const { error } = await supabase.from("extra_income_entries").delete().eq("id", id);
-    if (error) {
-      showToast("ลบไม่สำเร็จ: " + error.message, "err");
-      return;
-    }
-    showToast("ลบแล้ว");
-    loadEmpData();
+    if (error) return flash("ลบไม่สำเร็จ: " + error.message, "err");
+    flash("ลบแล้ว");
+    loadEntries();
   }
 
-  // ── เปลี่ยน toggle รอบจ่ายของรายการที่บันทึกแล้ว ──
-  async function changeDisburse(entry, newVal) {
+  // ── แก้ไข inline ──
+  function startEdit(e) {
+    setEditRow(e.id);
+    setEditVals({ amount: e.amount, label: e.label || "", note: e.amount_note || "", disburse_on: e.disburse_on || "month_end" });
+  }
+  async function saveEdit(e) {
     let cycleId = null;
-    if (newVal === "saturday") {
-      if (!nextCycle) {
-        showToast("ไม่มีรอบเสาร์ที่เปิดอยู่", "warn");
-        return;
-      }
+    if (editVals.disburse_on === "saturday") {
+      if (!nextCycle) return flash("ไม่มีรอบเสาร์ที่เปิดอยู่", "warn");
       cycleId = nextCycle.id;
     }
     const { error } = await supabase
       .from("extra_income_entries")
-      .update({ disburse_on: newVal, cycle_id: cycleId, updated_at: new Date().toISOString() })
-      .eq("id", entry.id);
-    if (error) {
-      showToast("แก้ไม่สำเร็จ: " + error.message, "err");
-      return;
-    }
-    loadEmpData();
+      .update({
+        amount: Number(editVals.amount),
+        label: e.income_type === "other" ? editVals.label : null,
+        amount_note: editVals.note || null,
+        disburse_on: editVals.disburse_on,
+        cycle_id: cycleId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", e.id);
+    if (error) return flash("แก้ไม่สำเร็จ: " + error.message, "err");
+    setEditRow(null);
+    flash("แก้แล้ว ✓");
+    loadEntries();
   }
 
-  const selectedEmp = employees.find((e) => e.id === empId);
-  const hasUnassigned = entries.some((e) => !e.disburse_on);
-  const totalAll = entries.reduce((s, e) => s + Number(e.amount), 0);
+  // ── จัดกลุ่มรายการตามพนักงาน ──
+  const grouped = {};
+  for (const e of entries) {
+    if (!grouped[e.employee_id]) grouped[e.employee_id] = [];
+    grouped[e.employee_id].push(e);
+  }
+  const empMap = Object.fromEntries(employees.map((e) => [e.id, e]));
 
-  // ── UI ────────────────────────────────────────────────────────
+  const typeLabel = (e) =>
+    e.income_type === "other" ? e.label : INCOME_TYPES.find((t) => t.value === e.income_type)?.label;
+
+  // ── UI ──
   return (
     <div style={S.wrap}>
-      {toast && (
-        <div style={{ ...S.toast, ...(toast.type === "err" ? S.toastErr : toast.type === "warn" ? S.toastWarn : S.toastOk) }}>
-          {toast.msg}
+      {msg && (
+        <div style={{ ...S.toast, background: msg.type === "err" ? "#dc2626" : msg.type === "warn" ? "#d97706" : GREEN }}>
+          {msg.text}
         </div>
       )}
 
-      <h2 style={S.title}>➕ รายได้พิเศษ</h2>
+      {/* ── ฟอร์มบันทึก ── */}
+      {canEdit && (
+        <div style={S.card}>
+          <h3 style={S.cardTitle}>➕ บันทึกรายได้พิเศษ</h3>
 
-      {/* เลือก period + พนักงาน */}
-      <div style={S.row}>
-        <div style={{ flex: 1 }}>
-          <label style={S.label}>เดือน</label>
-          <select style={S.select} value={periodId} onChange={(e) => { setPeriodId(e.target.value); setEmpId(""); }}>
-            {periods.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.month}/{p.year + 543} {p.is_closed ? "(ปิดแล้ว)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div style={{ flex: 2 }}>
-          <label style={S.label}>พนักงาน</label>
-          <select style={S.select} value={empId} onChange={(e) => setEmpId(e.target.value)}>
-            <option value="">— เลือกพนักงาน —</option>
-            {employees.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.emp_code} · {e.nickname} ({e.emp_type === "permanent" ? "ประจำ" : "ทดลอง/รายวัน"})
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {!empId && <p style={S.hint}>เลือกพนักงานเพื่อบันทึกรายได้พิเศษ</p>}
-
-      {empId && (
-        <>
-          {/* ปุ่มเพิ่ม 3 ประเภท */}
-          {canEdit && (
-            <div style={S.btnRow}>
-              {Object.entries(TYPE_CONFIG).map(([type, cfg]) => (
-                <button
-                  key={type}
-                  style={{ ...S.typeBtn, color: cfg.color, background: cfg.bg, borderColor: cfg.border }}
-                  onClick={() => openForm(type)}
-                >
-                  {cfg.icon} เพิ่ม{cfg.label}
-                </button>
-              ))}
+          <div style={S.row2}>
+            <div style={{ flex: 1 }}>
+              <label style={S.lbl}>เดือน</label>
+              <select style={S.select} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+                {periods.map((p) => (
+                  <option key={p.id} value={p.id}>{p.month}/{p.year + 543} {p.is_closed ? "(ปิดแล้ว)" : ""}</option>
+                ))}
+              </select>
             </div>
-          )}
-
-          {/* แสดงยอดจากระบบให้เห็นก่อน */}
-          <div style={S.infoBox}>
-            <span>📊 ยอดจากระบบ:</span>
-            <span style={{ marginLeft: 8 }}>
-              OT = {otFromSystem ? `${otFromSystem.hours} ชม. = ${fmtBaht(otFromSystem.amount)} บ.` : "ยังไม่มีข้อมูล"}
-            </span>
-            <span style={{ marginLeft: 16 }}>
-              เงินประจำตำแหน่ง = {fmtBaht(posFromSystem)} บ.
-            </span>
           </div>
 
-          {/* ฟอร์มเพิ่ม */}
-          {form && (
-            <div style={S.formCard}>
-              <div style={S.formHead}>
-                {TYPE_CONFIG[form.income_type].icon} {TYPE_CONFIG[form.income_type].label}
-              </div>
+          <div style={S.row2}>
+            <div style={{ flex: 1 }}>
+              <label style={S.lbl}>พนักงาน</label>
+              <select style={S.select} value={form.employee_id} onChange={(e) => onPickEmployee(e.target.value)}>
+                <option value="">— เลือกพนักงาน —</option>
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id}>{e.emp_code} · {e.nickname}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={S.lbl}>ประเภทรายได้</label>
+              <select style={S.select} value={form.income_type} onChange={(e) => onPickType(e.target.value)}>
+                <option value="">— เลือกประเภท —</option>
+                {INCOME_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-              {form.income_type === "other" && (
-                <div style={S.field}>
-                  <label style={S.label}>ชื่อรายการ</label>
-                  <input style={S.input} value={form.label} placeholder="เช่น โบนัส, ค่าพาหนะ"
-                    onChange={(e) => setForm({ ...form, label: e.target.value })} />
+          {/* ── card toggle รอบจ่าย (2 อันใหญ่) ── */}
+          <label style={{ ...S.lbl, textAlign: "center", display: "block", marginTop: 8 }}>จ่ายเมื่อไหร่</label>
+          <div style={S.cycleRow}>
+            {CYCLE_OPTIONS.map((c) => {
+              const active = form.disburse_on === c.value;
+              return (
+                <div key={c.value}
+                  style={{ ...S.cycleCard, ...(active ? { borderColor: GREEN, background: GREEN_BG } : {}) }}
+                  onClick={() => setForm((f) => ({ ...f, disburse_on: c.value }))}>
+                  <div style={{ fontWeight: 600, color: active ? GREEN_DARK : "#374151" }}>{c.label}</div>
+                  <div style={S.cycleDesc}>{c.desc}</div>
                 </div>
-              )}
+              );
+            })}
+          </div>
+          {form.disburse_on === "saturday" && (
+            <p style={S.hintCenter}>
+              {nextCycle ? `→ จะจ่ายรอบเสาร์ ${nextCycle.cycle_date}` : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
+            </p>
+          )}
 
-              <div style={S.field}>
-                <label style={S.label}>
-                  จำนวนเงิน (บาท)
-                  {form.income_type !== "other" && <span style={S.autoTag}>ดึงจากระบบ</span>}
-                </label>
-                <input style={S.input} type="number" value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-                {form.income_type !== "other" && Number(form.amount) !== Number(form._systemAmount) && (
-                  <p style={S.warnText}>⚠️ แก้ไขจากยอดระบบ ({fmtBaht(form._systemAmount)} บ.) — กรุณาระบุเหตุผล</p>
-                )}
-              </div>
-
-              {form.income_type !== "other" && Number(form.amount) !== Number(form._systemAmount) && (
-                <div style={S.field}>
-                  <label style={S.label}>เหตุผลที่แก้</label>
-                  <input style={S.input} value={form.override_reason} placeholder="เช่น OT พิเศษนอกระบบ"
-                    onChange={(e) => setForm({ ...form, override_reason: e.target.value })} />
-                </div>
-              )}
-
-              <div style={S.field}>
-                <label style={S.label}>จ่ายรอบไหน</label>
-                <div style={S.toggleRow}>
-                  {DISBURSE_OPTS.map((o) => (
-                    <button key={String(o.value)}
-                      style={{ ...S.toggleBtn, ...(form.disburse_on === o.value ? S.toggleActive : {}) }}
-                      onClick={() => setForm({ ...form, disburse_on: o.value })}>
-                      {o.label}
-                    </button>
-                  ))}
-                </div>
-                {form.disburse_on === "saturday" && (
-                  <p style={S.hint2}>
-                    {nextCycle
-                      ? `→ จะจ่ายรอบเสาร์ ${nextCycle.cycle_date}`
-                      : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
-                  </p>
-                )}
-              </div>
-
-              <div style={S.formBtns}>
-                <button style={S.saveBtn} onClick={saveEntry}>บันทึก</button>
-                <button style={S.cancelBtn} onClick={() => setForm(null)}>ยกเลิก</button>
-              </div>
+          {/* ── ชื่อรายการ (เฉพาะ อื่นๆ) ── */}
+          {form.income_type === "other" && (
+            <div style={{ marginTop: 12 }}>
+              <label style={S.lbl}>ชื่อรายการ</label>
+              <input style={S.input} value={form.label} placeholder="เช่น โบนัส, ค่าพาหนะ"
+                onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} />
             </div>
           )}
 
-          {/* รายการที่บันทึกแล้ว */}
-          {loading ? (
-            <p style={S.hint}>กำลังโหลด...</p>
-          ) : entries.length === 0 ? (
-            <p style={S.hint}>ยังไม่มีรายได้พิเศษสำหรับ {selectedEmp?.nickname}</p>
-          ) : (
-            <div style={S.list}>
-              {hasUnassigned && (
-                <div style={S.warnBanner}>
-                  ⚠️ มีรายการที่ยังไม่กำหนดรอบจ่าย — จะไม่ขึ้นในหน้าสรุปใดเลย
-                </div>
+          {/* ── จำนวนเงิน + วันที่ ── */}
+          <div style={{ ...S.row2, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={S.lbl}>
+                จำนวนเงิน (บาท)
+                {form.income_type !== "other" && form.income_type !== "" && <span style={S.autoTag}>ดึงจากระบบ</span>}
+              </label>
+              <input style={S.input} type="number" value={form.amount} placeholder="0.00"
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
+              {form.income_type !== "other" && form._systemAmount !== null && Number(form.amount) !== Number(form._systemAmount) && (
+                <p style={S.warnSmall}>⚠️ แก้จากยอดระบบ ({fmt(form._systemAmount)} บ.)</p>
               )}
-              {entries.map((e) => {
-                const cfg = TYPE_CONFIG[e.income_type];
-                return (
-                  <div key={e.id} style={{ ...S.entryCard, borderLeftColor: cfg.color }}>
-                    <div style={S.entryMain}>
-                      <div>
-                        <span style={{ fontWeight: 600, color: cfg.color }}>
-                          {cfg.icon} {e.income_type === "other" ? e.label : cfg.label}
-                        </span>
-                        {e.amount_note && <span style={S.entryNote}> · {e.amount_note}</span>}
-                        {e.is_overridden && <span style={S.overrideTag}>แก้แล้ว</span>}
-                      </div>
-                      <div style={S.entryAmount}>{fmtBaht(e.amount)} บ.</div>
-                    </div>
-                    <div style={S.entryFoot}>
-                      {canEdit ? (
-                        <select style={S.miniSelect} value={e.disburse_on || ""}
-                          onChange={(ev) => changeDisburse(e, ev.target.value || null)}>
-                          {DISBURSE_OPTS.map((o) => (
-                            <option key={String(o.value)} value={o.value || ""}>{o.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span style={S.disburseTag}>{disburseLabel(e.disburse_on)}</span>
-                      )}
-                      {canEdit && (
-                        <button style={S.delBtn} onClick={() => deleteEntry(e.id)}>ลบ</button>
-                      )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={S.lbl}>วันที่ทำรายการ</label>
+              <input style={S.input} type="date" value={form.entry_date}
+                onChange={(e) => setForm((f) => ({ ...f, entry_date: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* ── หมายเหตุ ── */}
+          <div style={{ marginTop: 12 }}>
+            <label style={S.lbl}>หมายเหตุ (ถ้ามี)</label>
+            <input style={S.input} value={form.note} placeholder="เช่น OT พิเศษ / โบนัสประจำเดือน"
+              onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
+          </div>
+
+          <button style={S.saveBtn} disabled={saving} onClick={save}>
+            {saving ? "กำลังบันทึก..." : "💾 บันทึกรายได้"}
+          </button>
+        </div>
+      )}
+
+      {/* ── รายการในงวด (จัดกลุ่มตามคน) ── */}
+      <h3 style={S.listTitle}>💰 รายได้พิเศษในงวดนี้</h3>
+      {loading ? (
+        <p style={S.hint}>กำลังโหลด...</p>
+      ) : entries.length === 0 ? (
+        <p style={S.hint}>ยังไม่มีรายได้พิเศษในงวดนี้</p>
+      ) : (
+        Object.entries(grouped).map(([empId, list]) => {
+          const emp = empMap[empId];
+          const sum = list.reduce((s, e) => s + Number(e.amount), 0);
+          const hasUnassigned = list.some((e) => !e.disburse_on);
+          return (
+            <div key={empId} style={S.empGroup}>
+              <div style={S.empHead}>
+                <span style={{ fontWeight: 600 }}>{emp?.nickname} <span style={S.empCode}>{emp?.emp_code}</span></span>
+                <span style={S.sumTag}>รวม {fmt(sum)} บาท</span>
+              </div>
+              {hasUnassigned && <div style={S.warnBanner}>⚠️ มีรายการที่ยังไม่กำหนดรอบจ่าย — จะไม่ขึ้นหน้าสรุป</div>}
+              {list.map((e) =>
+                editRow === e.id ? (
+                  <div key={e.id} style={S.editCard}>
+                    {e.income_type === "other" && (
+                      <input style={S.editInput} value={editVals.label} placeholder="ชื่อรายการ"
+                        onChange={(ev) => setEditVals({ ...editVals, label: ev.target.value })} />
+                    )}
+                    <input style={S.editInput} type="number" value={editVals.amount}
+                      onChange={(ev) => setEditVals({ ...editVals, amount: ev.target.value })} />
+                    <select style={S.editInput} value={editVals.disburse_on}
+                      onChange={(ev) => setEditVals({ ...editVals, disburse_on: ev.target.value })}>
+                      <option value="saturday">🗓 วันเสาร์</option>
+                      <option value="month_end">📅 สิ้นเดือน</option>
+                    </select>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button style={S.miniSave} onClick={() => saveEdit(e)}>✓</button>
+                      <button style={S.miniCancel} onClick={() => setEditRow(null)}>✕</button>
                     </div>
                   </div>
-                );
-              })}
-              <div style={S.totalRow}>
-                <span>รวมรายได้พิเศษ</span>
-                <span style={{ fontWeight: 700 }}>{fmtBaht(totalAll)} บ.</span>
-              </div>
+                ) : (
+                  <div key={e.id} style={S.entryRow}>
+                    <span style={S.typePill}>{typeLabel(e)}</span>
+                    <span style={S.entryAmt}>{fmt(e.amount)} บาท</span>
+                    <span style={S.cyclePill}>
+                      {e.disburse_on === "saturday" ? "🗓 เสาร์" : e.disburse_on === "month_end" ? "📅 สิ้นเดือน" : "⏳ ยังไม่กำหนด"}
+                    </span>
+                    {e.amount_note && <span style={S.entryNote}>{e.amount_note}</span>}
+                    {e.is_overridden && <span style={S.overrideTag}>แก้แล้ว</span>}
+                    {canEdit && (
+                      <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+                        <button style={S.editBtn} onClick={() => startEdit(e)}>✏️</button>
+                        <button style={S.delBtn} onClick={() => del(e.id)}>🗑</button>
+                      </span>
+                    )}
+                  </div>
+                )
+              )}
             </div>
-          )}
-        </>
+          );
+        })
       )}
     </div>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────
+// ── Styles (โทนเขียว) ──
 const S = {
-  wrap: { padding: "1rem", maxWidth: 720, margin: "0 auto" },
-  title: { fontSize: "1.3rem", fontWeight: 700, marginBottom: "1rem", color: "#1f2937" },
-  row: { display: "flex", gap: 12, marginBottom: 16 },
-  label: { display: "block", fontSize: "0.8rem", color: "#6b7280", marginBottom: 4 },
-  select: { width: "100%", padding: "0.5rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem" },
-  input: { width: "100%", padding: "0.5rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
-  hint: { color: "#9ca3af", fontSize: "0.9rem", textAlign: "center", padding: "1.5rem 0" },
-  hint2: { color: "#6b7280", fontSize: "0.8rem", marginTop: 6 },
-  btnRow: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" },
-  typeBtn: { padding: "0.5rem 0.9rem", borderRadius: 8, border: "1px solid", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer" },
-  infoBox: { background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "0.6rem 0.8rem", fontSize: "0.82rem", color: "#4b5563", marginBottom: 12, lineHeight: 1.6 },
-  formCard: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "1rem", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
-  formHead: { fontWeight: 700, fontSize: "1rem", marginBottom: 12 },
-  field: { marginBottom: 12 },
-  autoTag: { marginLeft: 8, fontSize: "0.7rem", background: "#fef3c7", color: "#b45309", padding: "2px 6px", borderRadius: 4 },
-  warnText: { color: "#dc2626", fontSize: "0.78rem", marginTop: 4 },
-  toggleRow: { display: "flex", gap: 6 },
-  toggleBtn: { flex: 1, padding: "0.5rem", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontSize: "0.85rem", cursor: "pointer", color: "#374151" },
-  toggleActive: { background: "#1f2937", color: "#fff", borderColor: "#1f2937" },
-  formBtns: { display: "flex", gap: 8, marginTop: 8 },
-  saveBtn: { flex: 1, padding: "0.6rem", borderRadius: 8, border: "none", background: "#16a34a", color: "#fff", fontWeight: 600, cursor: "pointer" },
-  cancelBtn: { flex: 1, padding: "0.6rem", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer" },
-  list: { marginTop: 8 },
-  warnBanner: { background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", padding: "0.6rem 0.8rem", borderRadius: 8, fontSize: "0.85rem", marginBottom: 10 },
-  entryCard: { background: "#fff", border: "1px solid #e5e7eb", borderLeft: "4px solid", borderRadius: 8, padding: "0.7rem 0.9rem", marginBottom: 8 },
-  entryMain: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-  entryNote: { color: "#9ca3af", fontSize: "0.85rem" },
-  entryAmount: { fontWeight: 700, fontSize: "1rem", color: "#1f2937" },
-  overrideTag: { marginLeft: 8, fontSize: "0.7rem", background: "#fef3c7", color: "#b45309", padding: "2px 6px", borderRadius: 4 },
-  entryFoot: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 },
-  miniSelect: { padding: "0.3rem 0.5rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.82rem" },
-  disburseTag: { fontSize: "0.82rem", color: "#6b7280" },
-  delBtn: { padding: "0.3rem 0.7rem", borderRadius: 6, border: "1px solid #fecaca", background: "#fef2f2", color: "#dc2626", fontSize: "0.8rem", cursor: "pointer" },
-  totalRow: { display: "flex", justifyContent: "space-between", padding: "0.7rem 0.9rem", background: "#f9fafb", borderRadius: 8, marginTop: 4, fontSize: "0.95rem" },
+  wrap: { maxWidth: 760, margin: "0 auto", padding: "1rem" },
+  card: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "1.2rem", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
+  cardTitle: { textAlign: "center", color: GREEN_DARK, fontWeight: 700, fontSize: "1.1rem", marginBottom: 16 },
+  row2: { display: "flex", gap: 12, marginBottom: 12 },
+  lbl: { display: "block", fontSize: "0.8rem", color: "#6b7280", marginBottom: 4 },
+  select: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
+  input: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
+  cycleRow: { display: "flex", gap: 12, marginTop: 6 },
+  cycleCard: { flex: 1, border: "2px solid #e5e7eb", borderRadius: 10, padding: "0.8rem", cursor: "pointer", textAlign: "center", transition: "all 0.15s" },
+  cycleDesc: { fontSize: "0.75rem", color: "#9ca3af", marginTop: 4 },
+  hintCenter: { textAlign: "center", color: "#6b7280", fontSize: "0.8rem", marginTop: 8 },
+  autoTag: { marginLeft: 8, fontSize: "0.7rem", background: "#dcfce7", color: GREEN_DARK, padding: "2px 6px", borderRadius: 4 },
+  warnSmall: { color: "#dc2626", fontSize: "0.78rem", marginTop: 4 },
+  saveBtn: { width: "100%", marginTop: 16, padding: "0.7rem", borderRadius: 8, border: "none", background: GREEN, color: "#fff", fontWeight: 700, fontSize: "1rem", cursor: "pointer" },
+  listTitle: { color: GREEN_DARK, fontWeight: 700, fontSize: "1.05rem", marginBottom: 12 },
+  hint: { color: "#9ca3af", textAlign: "center", padding: "1.5rem 0" },
+  empGroup: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "0.8rem", marginBottom: 12 },
+  empHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  empCode: { color: "#9ca3af", fontSize: "0.85rem", fontWeight: 400 },
+  sumTag: { background: GREEN_BG, color: GREEN_DARK, fontWeight: 600, fontSize: "0.85rem", padding: "3px 10px", borderRadius: 12, border: "1px solid " + GREEN_BORDER },
+  warnBanner: { background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626", padding: "0.5rem 0.7rem", borderRadius: 6, fontSize: "0.8rem", marginBottom: 8 },
+  entryRow: { display: "flex", alignItems: "center", gap: 8, padding: "0.5rem 0.2rem", borderTop: "1px solid #f3f4f6", flexWrap: "wrap" },
+  typePill: { background: GREEN_BG, color: GREEN_DARK, fontSize: "0.82rem", padding: "2px 8px", borderRadius: 6, fontWeight: 600 },
+  entryAmt: { fontWeight: 700, fontSize: "0.95rem", color: "#1f2937" },
+  cyclePill: { fontSize: "0.78rem", color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 6 },
+  entryNote: { fontSize: "0.8rem", color: "#9ca3af" },
+  overrideTag: { fontSize: "0.7rem", background: "#fef3c7", color: "#b45309", padding: "2px 6px", borderRadius: 4 },
+  editBtn: { border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, padding: "2px 8px", cursor: "pointer" },
+  delBtn: { border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 6, padding: "2px 8px", cursor: "pointer" },
+  editCard: { display: "flex", gap: 6, alignItems: "center", padding: "0.5rem 0", borderTop: "1px solid #f3f4f6", flexWrap: "wrap" },
+  editInput: { padding: "0.4rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.85rem" },
+  miniSave: { border: "none", background: GREEN, color: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  miniCancel: { border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
   toast: { position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", padding: "0.6rem 1.2rem", borderRadius: 8, color: "#fff", fontSize: "0.9rem", zIndex: 1000, boxShadow: "0 2px 8px rgba(0,0,0,0.15)" },
-  toastOk: { background: "#16a34a" },
-  toastWarn: { background: "#d97706" },
-  toastErr: { background: "#dc2626" },
 };
