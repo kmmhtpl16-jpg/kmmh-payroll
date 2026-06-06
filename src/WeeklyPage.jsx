@@ -107,8 +107,12 @@ function calcCycleWageForEmployee(record, logsInCycle) {
 
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
 
-  const dailyRate = record.base_wage / record.work_days;
-  const wage = parseFloat((dailyRate * workDays).toFixed(2));
+  // ทาง A: ใช้ net_pay เป็นฐาน → จ่ายได้เท่าที่ได้รับจริง ไม่ติดลบ
+  const net = record.net_pay != null
+    ? record.net_pay
+    : (record.total_income || 0) - (record.total_deduct || 0);
+  const dailyNet = net / record.work_days;
+  const wage = parseFloat((dailyNet * workDays).toFixed(2));
   return { workDays, wage };
 }
 
