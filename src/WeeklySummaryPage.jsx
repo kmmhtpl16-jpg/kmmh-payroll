@@ -13,7 +13,6 @@ import * as XLSX from "xlsx";
 
 const MONTHS_TH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.",
   "ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
-const DAYS_TH = ["อา","จ","อ","พ","พฤ","ศ","ส"];
 
 const fmt  = (n) => Number(n||0).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtI = (n) => Number(n||0).toLocaleString("th-TH");
@@ -23,26 +22,42 @@ function getDaysInMonth(year, month) {
   return new Date(year, month, 0).getDate();
 }
 
-// ─── helper: สร้าง range วัน จ-ส อัตโนมัติในเดือน ─────────
+// ─── helper: format วันที่เป็น YYYY-MM-DD ไม่ผ่าน timezone ───
+// ❌ เลิกใช้ toISOString() เพราะ UTC+7 → ถอยหลัง 1 วัน
+function toDateStr(year, month, day) {
+  return `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+}
+
+// ─── helper: สร้าง range รอบจ่ายครอบทั้งเดือน ─────────────
+// รอบแรก  : วันที่ 1 → เสาร์แรก
+// รอบกลาง : (อาทิตย์หลังเสาร์ก่อน) → เสาร์ถัดไป
+// รอบสุดท้าย: (อาทิตย์หลังเสาร์ก่อน) → สิ้นเดือน
+// → ครอบทุกวันในเดือน ไม่มีวันหลุด
+// → รองรับ 4 หรือ 5 เสาร์อัตโนมัติ
 function autoWeekRanges(yearAD, month) {
   const days = getDaysInMonth(yearAD, month);
-  const ranges = [];
-  let cur = new Date(yearAD, month - 1, 1);
 
-  // หา จันทร์แรกของเดือน (หรือวันที่ 1 ถ้าเป็นจันทร์)
-  while (cur.getDay() !== 1) cur = new Date(cur.getTime() + 86400000);
-
-  while (cur.getMonth() === month - 1) {
-    const from = new Date(cur);
-    const to   = new Date(cur.getTime() + 5 * 86400000); // เสาร์
-    const sat  = new Date(cur.getTime() + 5 * 86400000);
-    ranges.push({
-      date_from: from.toISOString().slice(0,10),
-      date_to:   to.toISOString().slice(0,10),
-      cycle_date: sat.toISOString().slice(0,10), // default = เสาร์
-    });
-    cur = new Date(cur.getTime() + 7 * 86400000);
+  // รวบรวมวันเสาร์ทั้งหมดในเดือน
+  const saturdays = [];
+  for (let d = 1; d <= days; d++) {
+    if (new Date(yearAD, month - 1, d).getDay() === 6) saturdays.push(d);
   }
+  if (saturdays.length === 0) return [];
+
+  const ranges = [];
+  let rangeFrom = 1; // รอบแรกเริ่มวันที่ 1 เสมอ
+
+  saturdays.forEach((sat, i) => {
+    const isLast  = i === saturdays.length - 1;
+    const rangeTo = isLast ? days : sat; // รอบสุดท้าย → สิ้นเดือน
+    ranges.push({
+      date_from:  toDateStr(yearAD, month, rangeFrom),
+      date_to:    toDateStr(yearAD, month, rangeTo),
+      cycle_date: toDateStr(yearAD, month, sat),
+    });
+    rangeFrom = sat + 1; // รอบถัดไปเริ่มวันถัดจากเสาร์ (=อาทิตย์ ไม่มีวันทำงาน)
+  });
+
   return ranges;
 }
 
@@ -50,7 +65,7 @@ export default function WeeklySummaryPage({ role }) {
   const now = new Date();
   const [yearBE,  setYearBE]  = useState(now.getFullYear() + 543);
   const [month,   setMonth]   = useState(now.getMonth() + 1);
-  const [cycles,  setCycles]  = useState([]);      // pay_cycles ใน DB
+  const [cycles,  setCycles]  = useState([]);
   const [employees, setEmployees] = useState([]);
   const [logs,    setLogs]    = useState([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +73,6 @@ export default function WeeklySummaryPage({ role }) {
   const [msg,     setMsg]     = useState(null);
   const [selectedCycle, setSelectedCycle] = useState(null);
 
-  // ── draft rows สำหรับสร้าง cycle ใหม่ ─────────────────────
   const [draftCycles, setDraftCycles] = useState([]);
   const [showDraft,   setShowDraft]   = useState(false);
 
@@ -73,20 +87,17 @@ export default function WeeklySummaryPage({ role }) {
       const days = getDaysInMonth(yearAD, month);
       const dateTo = `${yearAD}-${String(month).padStart(2,"0")}-${String(days).padStart(2,"0")}`;
 
-      // โหลด employees
       const { data: emps } = await supabase
         .from("employees").select("id,emp_code,nickname,full_name,emp_type,daily_rate,monthly_salary")
         .eq("is_active", true).order("emp_code");
       setEmployees(emps || []);
 
-      // โหลด attendance_logs ในเดือน
       const { data: logData } = await supabase
         .from("attendance_logs")
         .select("employee_id,work_date,late_minutes,ot_hours,needs_hr_review,scan_am_in,scan_pm_out")
         .gte("work_date", dateFrom).lte("work_date", dateTo);
       setLogs(logData || []);
 
-      // โหลด pay_cycles ที่บันทึกไว้
       const { data: period } = await supabase
         .from("pay_periods").select("id")
         .eq("year", yearAD).eq("month", month).maybeSingle();
@@ -106,7 +117,6 @@ export default function WeeklySummaryPage({ role }) {
     }
   };
 
-  // ── คำนวณสรุปรอบ ──────────────────────────────────────────
   function calcCycleSummary(dateFrom, dateTo) {
     const from = new Date(dateFrom);
     const to   = new Date(dateTo);
@@ -115,17 +125,16 @@ export default function WeeklySummaryPage({ role }) {
         const d = new Date(l.work_date);
         return l.employee_id === emp.id && d >= from && d <= to;
       });
-      const work_days   = empLogs.filter(l => !l.needs_hr_review).length;
+      const work_days    = empLogs.filter(l => !l.needs_hr_review).length;
       const late_minutes = empLogs.reduce((s,l) => s + (l.late_minutes||0), 0);
-      const ot_hours    = empLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
-      const daysInMonth = getDaysInMonth(yearBE - 543, month);
-      const dailyRate   = emp.emp_type === "permanent"
+      const ot_hours     = empLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
+      const daysInMonth  = getDaysInMonth(yearBE - 543, month);
+      const dailyRate    = emp.emp_type === "permanent"
         ? emp.monthly_salary / daysInMonth
         : (emp.daily_rate || 0);
-      const hourlyRate  = dailyRate / 8;
-      const base_wage   = Math.round(dailyRate * work_days * 100) / 100;
-      const ot_amount   = Math.round(hourlyRate * ot_hours * 100) / 100;
-      // สาย cap ต่อวัน
+      const hourlyRate   = dailyRate / 8;
+      const base_wage    = Math.round(dailyRate * work_days * 100) / 100;
+      const ot_amount    = Math.round(hourlyRate * ot_hours * 100) / 100;
       let late_deduct = 0;
       empLogs.forEach(l => {
         const m = l.late_minutes || 0;
@@ -141,14 +150,12 @@ export default function WeeklySummaryPage({ role }) {
     });
   }
 
-  // ── สร้าง draft cycles อัตโนมัติ ─────────────────────────
   const handleAutoDraft = () => {
     const ranges = autoWeekRanges(yearBE - 543, month);
     setDraftCycles(ranges.map(r => ({ ...r, note: "" })));
     setShowDraft(true);
   };
 
-  // ── บันทึก cycles ─────────────────────────────────────────
   const handleSaveCycles = async () => {
     setSaving(true);
     setMsg(null);
@@ -156,7 +163,6 @@ export default function WeeklySummaryPage({ role }) {
       const yearAD = yearBE - 543;
       const daysInMonth = getDaysInMonth(yearAD, month);
 
-      // หรือสร้าง pay_period ถ้ายังไม่มี
       let { data: period } = await supabase
         .from("pay_periods").select("id")
         .eq("year", yearAD).eq("month", month).maybeSingle();
@@ -170,7 +176,6 @@ export default function WeeklySummaryPage({ role }) {
         period = newP;
       }
 
-      // upsert pay_cycles
       const rows = draftCycles.map(d => ({
         period_id:  period.id,
         cycle_date: d.cycle_date,
@@ -194,7 +199,6 @@ export default function WeeklySummaryPage({ role }) {
     }
   };
 
-  // ── mark จ่ายแล้ว ─────────────────────────────────────────
   const handleMarkPaid = async (cycleId) => {
     const { error } = await supabase
       .from("pay_cycles")
@@ -205,12 +209,9 @@ export default function WeeklySummaryPage({ role }) {
     loadAll();
   };
 
-  // ── Export Excel ─────────────────────────────────────────
   const handleExport = (cycle) => {
     const summary = calcCycleSummary(cycle.date_from, cycle.date_to);
     const wb = XLSX.utils.book_new();
-
-    // Sheet: สรุปรอบ
     const rows = [
       [`สรุปรายอาทิตย์ — รอบ ${cycle.date_from} ถึง ${cycle.date_to} จ่าย ${cycle.cycle_date}`],
       [],
@@ -239,13 +240,10 @@ export default function WeeklySummaryPage({ role }) {
     XLSX.writeFile(wb, `สรุปรายอาทิตย์_${cycle.date_from}_${cycle.date_to}.xlsx`);
   };
 
-  // ─── Render ──────────────────────────────────────────────
   const selSummary = selectedCycle ? calcCycleSummary(selectedCycle.date_from, selectedCycle.date_to) : [];
 
   return (
     <div style={s.page}>
-
-      {/* Period picker */}
       <div style={s.topBar}>
         <div style={s.picker}>
           <label style={s.lbl}>ปี (พ.ศ.)</label>
@@ -266,7 +264,6 @@ export default function WeeklySummaryPage({ role }) {
         </button>
       </div>
 
-      {/* msg */}
       {msg && (
         <div style={{...s.msg,
           background: msg.type==="ok"?"#f0fdf4":msg.type==="warn"?"#fffbeb":"#fef2f2",
@@ -276,7 +273,6 @@ export default function WeeklySummaryPage({ role }) {
         </div>
       )}
 
-      {/* Draft cycles */}
       {showDraft && (
         <div style={s.card}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -329,7 +325,6 @@ export default function WeeklySummaryPage({ role }) {
         </div>
       )}
 
-      {/* รายการรอบที่มีอยู่ */}
       <div style={s.card}>
         <p style={{margin:"0 0 12px",fontWeight:700,fontSize:15}}>
           📅 รอบที่บันทึกไว้ — {MONTHS_TH[month]} {yearBE}
@@ -382,7 +377,6 @@ export default function WeeklySummaryPage({ role }) {
                 )}
               </div>
 
-              {/* รายคน */}
               {isSelected && (
                 <div style={{overflowX:"auto",marginTop:12}}>
                   <table style={s.table}>
@@ -437,7 +431,6 @@ export default function WeeklySummaryPage({ role }) {
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────
 const s = {
   page: { maxWidth:1000, margin:"0 auto" },
   topBar: { display:"flex", alignItems:"flex-end", gap:12, marginBottom:12,
