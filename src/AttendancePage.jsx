@@ -5,14 +5,15 @@ import { saveAttendanceToSupabase, loadRecentImports, deleteImport } from "./sup
 import { supabase } from "./supabaseClient";
 
 // ── ปุ่ม preset หมายเหตุ HR ──
-// กดแล้วใส่ข้อความลงช่อง hr_note อัตโนมัติ แก้เพิ่มได้ที่นี่
+// fullDay: true  = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
+// fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
 const HR_NOTE_PRESETS = [
-  { label: "ลาป่วย",         value: "ลาป่วย" },
-  { label: "ลากิจ",          value: "ลากิจ" },
-  { label: "ลาครึ่งวัน",     value: "ลาครึ่งวัน" },
-  { label: "ออกระหว่างวัน",  value: "ออกระหว่างวัน" },
-  { label: "ขาดงาน",         value: "ขาดงาน" },
-  { label: "วันหยุด",        value: "วันหยุดบริษัท" },
+  { label: "ลาป่วย",         value: "ลาป่วย",         fullDay: true  },
+  { label: "ลากิจ",          value: "ลากิจ",          fullDay: true  },
+  { label: "ลาครึ่งวัน",     value: "ลาครึ่งวัน",     fullDay: false },
+  { label: "ออกระหว่างวัน",  value: "ออกระหว่างวัน",  fullDay: false },
+  { label: "ขาดงาน",         value: "ขาดงาน",         fullDay: true  },
+  { label: "วันหยุด",        value: "วันหยุดบริษัท",   fullDay: true  },
 ];
 
 function processAttendance(rows, employees) {
@@ -135,22 +136,29 @@ export default function AttendancePage({ role }) {
       date:     editRow.work_date,
     });
 
+    // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
+    const fullDayNote      = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
+    const isFullDayAbsence = !!fullDayNote;
+
     const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
+    // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด  หรือ  เป็นลา/ขาดทั้งวัน
+    const isDone    = allFilled || isFullDayAbsence;
 
     const { error } = await supabase
       .from("attendance_logs")
       .update({
-        scan_am_in:      am_in  || null,
-        scan_am_out:     am_out || null,
-        scan_pm_in:      pm_in  || null,
-        scan_pm_out:     pm_out || null,
-        late_minutes:    lateMin,
-        ot_hours:        otHours,
+        // ลา/ขาดทั้งวัน = ไม่มาทำงาน → ล้างเวลา + สาย/OT เป็น 0
+        scan_am_in:      isFullDayAbsence ? null : (am_in  || null),
+        scan_am_out:     isFullDayAbsence ? null : (am_out || null),
+        scan_pm_in:      isFullDayAbsence ? null : (pm_in  || null),
+        scan_pm_out:     isFullDayAbsence ? null : (pm_out || null),
+        late_minutes:    isFullDayAbsence ? 0 : lateMin,
+        ot_hours:        isFullDayAbsence ? 0 : otHours,
         hr_note:          editValues.hr_note || null,
         hr_extra_deduct:  parseFloat(editValues.hr_extra_deduct) || 0,
         hr_extra_note:    editValues.hr_extra_note || null,
-        needs_hr_review:  allFilled ? false : true,
-        is_confirmed:    allFilled ? true  : false,
+        needs_hr_review:  isDone ? false : true,
+        is_confirmed:    isDone ? true  : false,
         updated_at:      new Date().toISOString(),
       })
       .eq("id", editRow.id);
@@ -158,9 +166,12 @@ export default function AttendancePage({ role }) {
     if (error) {
       setEditMsg({ type: "error", text: "❌ " + error.message });
     } else {
-      setEditMsg({ type: "ok", text: "✅ บันทึกแล้ว" + (allFilled ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)") });
-      setReviewLogs(prev => prev.filter(l => l.id !== editRow.id || !allFilled));
-      if (allFilled) setTimeout(() => setEditRow(null), 800);
+      const doneText = isFullDayAbsence
+        ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
+        : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
+      setEditMsg({ type: "ok", text: "✅ บันทึกแล้ว" + doneText });
+      setReviewLogs(prev => prev.filter(l => l.id !== editRow.id || !isDone));
+      if (isDone) setTimeout(() => setEditRow(null), 800);
     }
     setSavingEdit(false);
   };
@@ -425,17 +436,26 @@ export default function AttendancePage({ role }) {
               <div style={{ marginBottom:8 }}>
                 <label style={{ display:"block", fontSize:12, color:"#64748b",
                   fontWeight:600, marginBottom:6 }}>หมายเหตุ HR</label>
+                <p style={{ margin:"0 0 8px", fontSize:11, color:"#166534",
+                  background:"#f0fdf4", padding:"4px 8px", borderRadius:6,
+                  border:"1px solid #bbf7d0" }}>
+                  💡 ปุ่มสีเขียว (ลา/ขาด/วันหยุด ทั้งวัน) — กดแล้วกด "บันทึก" ได้เลย ไม่ต้องกรอกเวลา
+                </p>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
-                  {HR_NOTE_PRESETS.map(p => (
-                    <button key={p.value}
-                      onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
-                      style={{
-                        ...s.presetBtn,
-                        ...(editValues.hr_note === p.value ? s.presetBtnActive : {}),
-                      }}>
-                      {p.label}
-                    </button>
-                  ))}
+                  {HR_NOTE_PRESETS.map(p => {
+                    const isActive = editValues.hr_note === p.value;
+                    return (
+                      <button key={p.value}
+                        onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
+                        style={{
+                          ...s.presetBtn,
+                          ...(p.fullDay ? s.presetBtnFullDay : {}),
+                          ...(isActive ? (p.fullDay ? s.presetBtnFullDayActive : s.presetBtnActive) : {}),
+                        }}>
+                        {p.fullDay ? "🟢 " : ""}{p.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <input type="text" value={editValues.hr_note}
                   onChange={e => setEditValues(p => ({ ...p, hr_note: e.target.value }))}
@@ -555,5 +575,12 @@ const s = {
   },
   presetBtnActive: {
     background:"#dbeafe", borderColor:"#93c5fd", color:"#1e40af",
+  },
+  // ── ปุ่มกลุ่ม "ลา/ขาดทั้งวัน" (กดแล้วบันทึกจบ) ──
+  presetBtnFullDay: {
+    borderColor:"#bbf7d0", color:"#166534", background:"#f0fdf4",
+  },
+  presetBtnFullDayActive: {
+    background:"#16a34a", borderColor:"#16a34a", color:"#fff",
   },
 };
