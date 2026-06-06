@@ -192,13 +192,12 @@ export default function WeeklyPage({ role }) {
       const builtCycles = buildCyclesFromCalendar(year, month, logDates);
       setCycles(builtCycles);
 
-      // 5. ดึงเบิกเงินสด จาก deductions (type = เบิกเงินสด)
-      //    ข้อมูลจริงอยู่ที่นี่ — advance_requests ว่างเปล่า
-      const ADVANCE_TYPE_ID = "eb37bbd8-3636-4c37-a4dc-59b04a03ac61";
+      // 5. ดึงรายจ่ายที่เลือก "หักวันเสาร์" (deduct_cycle = 'saturday')
+      //    ครอบคลุมทุก type: เบิกเงินสด, เงินกู้ยืม, หรืออื่นๆ ที่ HR ติ๊กว่าหักเสาร์
       const { data: adv } = await supabase
         .from("deductions")
         .select("employee_id, amount, deduct_date")
-        .eq("deduction_type_id", ADVANCE_TYPE_ID)
+        .eq("deduct_cycle", "saturday")
         .in("employee_id", empIds)
         .gte("deduct_date", dateFrom)
         .lte("deduct_date", dateTo);
