@@ -126,7 +126,7 @@ export default function PayrollPage({ role }) {
             <table style={s.table}>
               <thead>
                 <tr>
-                  {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","ค่าอาทิตย์","OT","ตำแหน่ง","เบี้ยขยัน",
+                  {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","ค่าอาทิตย์","OT","ตำแหน่ง","เบี้ยขยัน","อื่นๆ",
                     "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ"].map((h, idx) => (
                     <th key={h} style={idx===0 ? { ...s.th, ...s.stickyTh } : s.th}>{h}</th>
                   ))}
@@ -150,6 +150,9 @@ export default function PayrollPage({ role }) {
                     <td style={{ ...s.td, textAlign:"right" }}>{fmt(r.position_allowance)}</td>
                     <td style={{ ...s.td, textAlign:"right", color: r.diligence_bonus>0?"#166534":"#9ca3af" }}>
                       {fmt(r.diligence_bonus)}
+                    </td>
+                    <td style={{ ...s.td, textAlign:"right", color: r.other_income>0?"#166534":"#9ca3af" }}>
+                      {r.other_income>0 ? fmt(r.other_income) : "—"}
                     </td>
                     <td style={{ ...s.td, textAlign:"right", fontWeight:600, color:"#166534" }}>
                       {fmt(r.total_income)}
@@ -178,6 +181,7 @@ export default function PayrollPage({ role }) {
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.ot_amount,0))}</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.position_allowance,0))}</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.diligence_bonus,0))}</td>
+                  <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+(r.other_income||0),0))}</td>
                   <td style={{ ...s.td, textAlign:"right", color:"#166534" }}>{fmt(result.summary.total_income)}</td>
                   <td style={s.td}></td>
                   <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(result.results.reduce((a,r)=>a+r.late_deduct,0))}</td>
@@ -215,6 +219,7 @@ export default function PayrollPage({ role }) {
                 ["OT",                `${detail.ot_hours} ชม. = +${fmt(detail.ot_amount)}`],
                 ["เงินประจำตำแหน่ง",  `+${fmt(detail.position_allowance)}`],
                 ["เบี้ยขยัน",         `+${fmt(detail.diligence_bonus)}`],
+                ["รายได้อื่นๆ",       `+${fmt(detail.other_income)}`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} />)}
               <Row label="รวมรายได้" value={fmt(detail.total_income)} bold green />
 

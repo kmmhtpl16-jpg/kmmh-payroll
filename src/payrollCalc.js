@@ -1,7 +1,15 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v5
+// คำนวณเงินเดือน KMMH — v6
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v6 เปลี่ยนจาก v5:
+//   • รายได้ "อื่นๆ" (โบนัส/ค่าพาหนะ ที่บันทึกในหน้ารายได้พิเศษ)
+//     จะถูกบวกเข้า total_income → net_pay ด้วย
+//     - ดึงเฉพาะ income_type='other' (ไม่ดึง OT ซ้ำ เพราะ OT คิดจากสแกนแล้ว)
+//     - รวมทุกรายการ "อื่นๆ" ของคนนั้นในงวด (ทั้งติดป้ายเสาร์/สิ้นเดือน)
+//   • หน้าเงินเดือน = จ่ายจริง เท่ากันเป๊ะ (รักษากฎเดิม)
+//   ⚠️ เพิ่มโบนัสแล้วต้องกด "คำนวณเงินเดือน" ใหม่ ตัวเลขจึงจะอัปเดต
 //
 // 🔧 v5 เปลี่ยนจาก v4:
 //   • OT: ตอนกด "บันทึกลง DB" จะสร้าง/อัปเดตรายการ OT ลง
@@ -142,6 +150,22 @@ export async function calcPayroll(year, month) {
     .gte("request_date", dateFrom)
     .lte("request_date", dateTo);
 
+  // ── ดึงรายได้ "อื่นๆ" จาก extra_income (โบนัส/ค่าพาหนะ ฯลฯ) ──
+  //   เฉพาะ income_type='other' — ไม่ดึง OT (OT คิดจากสแกนใน total_income แล้ว)
+  const otherIncomeMap = {};
+  const { data: period0 } = await supabase
+    .from("pay_periods").select("id").eq("year", year).eq("month", month).maybeSingle();
+  if (period0) {
+    const { data: extraOther } = await supabase
+      .from("extra_income_entries")
+      .select("employee_id, amount")
+      .eq("period_id", period0.id)
+      .eq("income_type", "other");
+    (extraOther || []).forEach(e => {
+      otherIncomeMap[e.employee_id] = (otherIncomeMap[e.employee_id] || 0) + Number(e.amount || 0);
+    });
+  }
+
   // ── คำนวณรายคน ──
   const results = [];
 
@@ -255,9 +279,11 @@ export async function calcPayroll(year, month) {
       (empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0) + deduct_advance).toFixed(2)
     );
 
+    const other_income = parseFloat((otherIncomeMap[emp.id] || 0).toFixed(2));
+
     const total_income = parseFloat((
       base_wage + holiday_wage + ot_amount + position_allowance +
-      diligence_bonus + app_fee_refund + insurance_refund
+      diligence_bonus + other_income + app_fee_refund + insurance_refund
     ).toFixed(2));
 
     const total_deduct = parseFloat((
@@ -284,6 +310,7 @@ export async function calcPayroll(year, month) {
       holiday_wage,
       position_allowance,
       diligence_bonus,
+      other_income,
       late_minutes,
       late_deduct:       parseFloat(late_deduct.toFixed(2)),
       leave_days:        0,
