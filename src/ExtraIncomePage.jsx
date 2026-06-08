@@ -1,6 +1,14 @@
 // src/ExtraIncomePage.jsx
-// หน้าบันทึกรายได้พิเศษ (OT / เงินประจำตำแหน่ง / อื่นๆ) — KMMH Payroll
+// หน้าบันทึกรายได้พิเศษ — KMMH Payroll
 // ทรงเดียวกับ DeductionsPage แต่โทนเขียว (รายได้ = เงินเข้า)
+//
+// 🔧 v2: เหลือ 2 ประเภทเท่านั้น
+//   • ⏰ OT      → ดึงยอดจากระบบอัตโนมัติ (ตัวจริงของรอบจ่าย OT)
+//   • ✏️ อื่นๆ   → พิมพ์เอง (โบนัส/ค่าพาหนะ/เงินรางวัล ที่เครื่องสแกนไม่รู้)
+//   ── เอา "เงินประจำตำแหน่ง" ออก เพราะระบบคำนวณ+รวมในเงินเดือนให้แล้ว
+//      (ตั้งค่าคงที่ในโปรไฟล์พนักงาน) — คีย์ที่นี่จะนับซ้ำ
+//   ── เบี้ยขยันก็เช่นกัน: ระบบคิดเองจากการสแกน ไม่ต้องคีย์
+//
 // เพิ่มแท็บใน App.jsx:
 //   import ExtraIncomePage from "./ExtraIncomePage";
 //   { id: "extra", label: "➕ รายได้พิเศษ" },
@@ -17,11 +25,10 @@ const GREEN_DARK = "#15803d";
 const GREEN_BG = "#f0fdf4";
 const GREEN_BORDER = "#bbf7d0";
 
-// ประเภทรายได้พิเศษ (fixed 3 แบบ — ไม่เพิ่มเองเหมือน deduction)
+// ประเภทรายได้พิเศษ (เหลือ 2 แบบ)
 const INCOME_TYPES = [
-  { value: "ot",                 label: "⏰ OT",                 auto: true },
-  { value: "position_allowance", label: "🏅 เงินประจำตำแหน่ง",  auto: true },
-  { value: "other",              label: "✏️ อื่นๆ",             auto: false },
+  { value: "ot",    label: "⏰ OT",    auto: true },
+  { value: "other", label: "✏️ อื่นๆ", auto: false },
 ];
 
 // รอบจ่าย (card ใหญ่ 2 อัน เหมือน CYCLE_OPTIONS ของ DeductionsPage)
@@ -118,25 +125,18 @@ export default function ExtraIncomePage({ role }) {
     setLoading(false);
   }
 
-  // ── ดึงยอดจากระบบเมื่อเลือกคน + ประเภท auto ──
-  async function fetchSystemAmount(empId, type) {
-    if (type === "ot") {
-      if (sysCache[empId]?.ot !== undefined) return sysCache[empId].ot;
-      const { data: pr } = await supabase
-        .from("payroll_records")
-        .select("ot_hours, ot_amount")
-        .eq("employee_id", empId)
-        .eq("period_id", periodId)
-        .maybeSingle();
-      const ot = pr ? { hours: pr.ot_hours, amount: Number(pr.ot_amount || 0) } : null;
-      setSysCache((c) => ({ ...c, [empId]: { ...c[empId], ot } }));
-      return ot;
-    }
-    if (type === "position_allowance") {
-      const emp = employees.find((e) => e.id === empId);
-      return { amount: Number(emp?.position_allowance || 0) };
-    }
-    return null;
+  // ── ดึงยอด OT จากระบบเมื่อเลือกคน ──
+  async function fetchSystemAmount(empId) {
+    if (sysCache[empId]?.ot !== undefined) return sysCache[empId].ot;
+    const { data: pr } = await supabase
+      .from("payroll_records")
+      .select("ot_hours, ot_amount")
+      .eq("employee_id", empId)
+      .eq("period_id", periodId)
+      .maybeSingle();
+    const ot = pr ? { hours: pr.ot_hours, amount: Number(pr.ot_amount || 0) } : null;
+    setSysCache((c) => ({ ...c, [empId]: { ...c[empId], ot } }));
+    return ot;
   }
 
   // ── เมื่อเลือกคน หรือ ประเภท → auto-fill ยอด ──
@@ -150,21 +150,18 @@ export default function ExtraIncomePage({ role }) {
   }
 
   async function applyAuto(empId, type) {
-    if (type === "other") {
+    if (type !== "ot") {
+      // อื่นๆ → ปล่อยให้พิมพ์เอง
       setForm((f) => ({ ...f, amount: "", note: "", _systemAmount: null }));
       return;
     }
-    const sys = await fetchSystemAmount(empId, type);
-    if (type === "ot") {
-      if (!sys) {
-        setForm((f) => ({ ...f, amount: "", note: "", _systemAmount: null }));
-        flash("ยังไม่มีข้อมูล OT เดือนนี้ (ต้องคำนวณเวลาก่อน)", "warn");
-        return;
-      }
-      setForm((f) => ({ ...f, amount: String(sys.amount), note: `${sys.hours} ชม.`, _systemAmount: sys.amount }));
-    } else {
-      setForm((f) => ({ ...f, amount: String(sys.amount), note: "ค่าประจำตำแหน่งตามที่ตั้งไว้", _systemAmount: sys.amount }));
+    const sys = await fetchSystemAmount(empId);
+    if (!sys) {
+      setForm((f) => ({ ...f, amount: "", note: "", _systemAmount: null }));
+      flash("ยังไม่มีข้อมูล OT เดือนนี้ (ต้องคำนวณเวลาก่อน)", "warn");
+      return;
     }
+    setForm((f) => ({ ...f, amount: String(sys.amount), note: `${sys.hours} ชม.`, _systemAmount: sys.amount }));
   }
 
   // ── บันทึก ──
@@ -174,10 +171,10 @@ export default function ExtraIncomePage({ role }) {
     if (form.income_type === "other" && !form.label.trim()) return flash("ใส่ชื่อรายการ", "warn");
     if (form.amount === "" || Number(form.amount) < 0) return flash("จำนวนเงินไม่ถูกต้อง", "warn");
 
-    // กัน OT / ประจำตำแหน่ง ซ้ำ
-    if (form.income_type !== "other") {
-      const dup = entries.some((e) => e.employee_id === form.employee_id && e.income_type === form.income_type);
-      if (dup) return flash(`มี${form.income_type === "ot" ? "OT" : "เงินประจำตำแหน่ง"}ของคนนี้แล้วในเดือนนี้`, "warn");
+    // กัน OT ซ้ำ
+    if (form.income_type === "ot") {
+      const dup = entries.some((e) => e.employee_id === form.employee_id && e.income_type === "ot");
+      if (dup) return flash("มี OT ของคนนี้แล้วในเดือนนี้", "warn");
     }
 
     let cycleId = null;
@@ -187,7 +184,7 @@ export default function ExtraIncomePage({ role }) {
     }
 
     const overridden =
-      form.income_type !== "other" &&
+      form.income_type === "ot" &&
       form._systemAmount !== null &&
       Number(form.amount) !== Number(form._systemAmount);
 
@@ -261,7 +258,7 @@ export default function ExtraIncomePage({ role }) {
   const empMap = Object.fromEntries(employees.map((e) => [e.id, e]));
 
   const typeLabel = (e) =>
-    e.income_type === "other" ? e.label : INCOME_TYPES.find((t) => t.value === e.income_type)?.label;
+    e.income_type === "other" ? e.label : INCOME_TYPES.find((t) => t.value === e.income_type)?.label || e.income_type;
 
   // ── UI ──
   return (
@@ -344,11 +341,11 @@ export default function ExtraIncomePage({ role }) {
             <div style={{ flex: 1 }}>
               <label style={S.lbl}>
                 จำนวนเงิน (บาท)
-                {form.income_type !== "other" && form.income_type !== "" && <span style={S.autoTag}>ดึงจากระบบ</span>}
+                {form.income_type === "ot" && <span style={S.autoTag}>ดึงจากระบบ</span>}
               </label>
               <input style={S.input} type="number" value={form.amount} placeholder="0.00"
                 onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} />
-              {form.income_type !== "other" && form._systemAmount !== null && Number(form.amount) !== Number(form._systemAmount) && (
+              {form.income_type === "ot" && form._systemAmount !== null && Number(form.amount) !== Number(form._systemAmount) && (
                 <p style={S.warnSmall}>⚠️ แก้จากยอดระบบ ({fmt(form._systemAmount)} บ.)</p>
               )}
             </div>
