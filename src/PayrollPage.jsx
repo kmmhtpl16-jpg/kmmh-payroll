@@ -127,7 +127,7 @@ export default function PayrollPage({ role }) {
               <thead>
                 <tr>
                   {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","ค่าอาทิตย์","OT","ตำแหน่ง","เบี้ยขยัน",
-                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ",""].map((h, idx) => (
+                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ"].map((h, idx) => (
                     <th key={h} style={idx===0 ? { ...s.th, ...s.stickyTh } : s.th}>{h}</th>
                   ))}
                 </tr>
@@ -138,6 +138,7 @@ export default function PayrollPage({ role }) {
                     onClick={() => setDetail(r)}>
                     <td style={{ ...s.td, ...s.stickyTd, fontWeight:700,
                       background: r.has_review ? "#fffbeb" : "#fff" }}>
+                      <span style={s.viewIcon}>🔍</span>
                       {r.nickname}{r.has_review && <span style={s.reviewTag}>⚠️</span>}
                     </td>
                     <td style={s.td}>{r.emp_type==="permanent" ? "ประจำ" : "ทดลอง"}</td>
@@ -166,9 +167,6 @@ export default function PayrollPage({ role }) {
                     <td style={{ ...s.td, textAlign:"right", fontWeight:700, fontSize:15, color:"#1e40af" }}>
                       {fmtInt(r.net_pay)}
                     </td>
-                    <td style={s.td}>
-                      <button onClick={e => { e.stopPropagation(); setDetail(r); }} style={s.detailBtn}>ดู</button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -188,7 +186,6 @@ export default function PayrollPage({ role }) {
                   <td style={{ ...s.td, textAlign:"right", color:"#dc2626" }}>{fmt(result.results.reduce((a,r)=>a+r.advance_total,0))}</td>
                   <td style={{ ...s.td, textAlign:"right", color:"#991b1b" }}>{fmt(result.summary.total_deduct)}</td>
                   <td style={{ ...s.td, textAlign:"right", color:"#1e40af" }}>{fmtInt(result.summary.total_net_pay)}</td>
-                  <td style={s.td}></td>
                 </tr>
               </tfoot>
             </table>
@@ -315,6 +312,7 @@ const s = {
   stickyTh: { position:"sticky", left:0, zIndex:3, background:"#1e3a5f", boxShadow:"2px 0 5px rgba(0,0,0,0.12)" },
   stickyTd: { position:"sticky", left:0, zIndex:2, boxShadow:"2px 0 5px rgba(0,0,0,0.06)" },
   reviewTag: { marginLeft:4, fontSize:11 },
+  viewIcon: { marginRight:6, fontSize:12, opacity:0.55 },
   detailBtn: { padding:"3px 10px", borderRadius:6, border:"1px solid #e2e8f0", background:"#f8fafc", cursor:"pointer", fontSize:12 },
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
     display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 },
