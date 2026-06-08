@@ -4,6 +4,7 @@
 //        (การแยกรอบจ่ายย้ายไปหน้า 📅 รายอาทิตย์)
 // 🔧 v4: ตอนกด "บันทึกลง DB" ระบบจะเตรียมรายการ OT ลงหน้ารายได้พิเศษให้
 //        อัตโนมัติ (ตั้งต้นจ่ายสิ้นเดือน) — ยอดสุทธิหน้านี้ยังรวม OT ตามเดิม
+// 🔧 v5: ตารางเต็มความกว้างจอ + ตรึงคอลัมน์ "ชื่อ" ให้ติดซ้ายตลอดเวลาเลื่อน
 import { useState } from "react";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
 import { exportPayrollExcel } from "./payrollExport";
@@ -126,8 +127,8 @@ export default function PayrollPage({ role }) {
               <thead>
                 <tr>
                   {["ชื่อ","ประเภท","วันทำงาน","OT(ชม.)","เงินเดือน","ค่าอาทิตย์","OT","ตำแหน่ง","เบี้ยขยัน",
-                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ",""].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
+                    "รายได้รวม","สาย(น.)","หักสาย","ปกส.","ประกันงาน","เบิก","รายหักรวม","สุทธิ",""].map((h, idx) => (
+                    <th key={h} style={idx===0 ? { ...s.th, ...s.stickyTh } : s.th}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -135,7 +136,8 @@ export default function PayrollPage({ role }) {
                 {result.results.map((r) => (
                   <tr key={r.employee_id} style={{ background: r.has_review ? "#fffbeb" : "white" }}
                     onClick={() => setDetail(r)}>
-                    <td style={{ ...s.td, fontWeight:700 }}>
+                    <td style={{ ...s.td, ...s.stickyTd, fontWeight:700,
+                      background: r.has_review ? "#fffbeb" : "#fff" }}>
                       {r.nickname}{r.has_review && <span style={s.reviewTag}>⚠️</span>}
                     </td>
                     <td style={s.td}>{r.emp_type==="permanent" ? "ประจำ" : "ทดลอง"}</td>
@@ -172,7 +174,7 @@ export default function PayrollPage({ role }) {
               </tbody>
               <tfoot>
                 <tr style={{ background:"#f0f4f8", fontWeight:700 }}>
-                  <td style={s.td} colSpan={4}>รวม</td>
+                  <td style={{ ...s.td, ...s.stickyTd, background:"#f0f4f8" }} colSpan={4}>รวม</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.base_wage,0))}</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.holiday_wage,0))}</td>
                   <td style={{ ...s.td, textAlign:"right" }}>{fmt(result.results.reduce((a,r)=>a+r.ot_amount,0))}</td>
@@ -288,7 +290,7 @@ function Row({ label, value, bold, green, red }) {
 }
 
 const s = {
-  page: { maxWidth:1200, margin:"0 auto" },
+  page: { maxWidth:"100%", margin:"0 auto" },
   topBar: { display:"flex", alignItems:"flex-end", gap:12, marginBottom:12,
     flexWrap:"wrap", background:"#fff", padding:16, borderRadius:12,
     boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
@@ -310,6 +312,8 @@ const s = {
   table: { width:"100%", borderCollapse:"collapse", fontSize:12, background:"#fff", borderRadius:12, overflow:"hidden" },
   th: { padding:"8px 8px", textAlign:"left", background:"#1e3a5f", color:"#fff", fontWeight:700, whiteSpace:"nowrap" },
   td: { padding:"7px 8px", borderBottom:"1px solid #f1f5f9", whiteSpace:"nowrap", cursor:"pointer" },
+  stickyTh: { position:"sticky", left:0, zIndex:3, background:"#1e3a5f", boxShadow:"2px 0 5px rgba(0,0,0,0.12)" },
+  stickyTd: { position:"sticky", left:0, zIndex:2, boxShadow:"2px 0 5px rgba(0,0,0,0.06)" },
   reviewTag: { marginLeft:4, fontSize:11 },
   detailBtn: { padding:"3px 10px", borderRadius:6, border:"1px solid #e2e8f0", background:"#f8fafc", cursor:"pointer", fontSize:12 },
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
