@@ -1,5 +1,12 @@
 // src/WeeklyPage.jsx
-// ทาง B (v4) — รอบจากปฏิทิน + payout_vouchers + เรียง emp_code + modal อ่านง่าย
+// ทาง B (v5) — รอบจากปฏิทิน + payout_vouchers + เรียง emp_code + modal อ่านง่าย
+//
+// 🔧 v5: ดึง OT ที่ติดป้าย "จ่ายเสาร์" (จากหน้ารายได้พิเศษ) มาบวกเข้ารอบเสาร์
+//        - OT อยู่ในยอดสุทธิอยู่แล้ว → ใส่รอบเสาร์ = ก้อนสิ้นเดือนลดลงเอง
+//          (สูตรสิ้นเดือน = สุทธิ − เสาร์) → ยอดรวมไม่เปลี่ยน นับครั้งเดียว
+//        - OT ติดป้ายสิ้นเดือน → ปล่อยให้ตกในก้อนสิ้นเดือนตามเดิม
+//        - จับคู่รอบจาก cycle_date ที่ HR เลือก; จับไม่ได้ → รอบเสาร์สุดท้าย
+//        ⚠️ "อื่นๆ" (รายได้ที่เครื่องไม่รู้) ยังไม่รวมในนี้ — รอตกลง logic เพิ่ม
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
@@ -87,6 +94,8 @@ export default function WeeklyPage({ role }) {
   const [payrolls,     setPayrolls]     = useState([]);
   const [allLogs,      setAllLogs]      = useState([]);
   const [advances,     setAdvances]     = useState([]);
+  const [extraIncome,  setExtraIncome]  = useState([]);   // v5: รายได้พิเศษ (OT)
+  const [cycleDateMap, setCycleDateMap] = useState({});   // v5: pay_cycle id → cycle_date
   const [vouchers,     setVouchers]     = useState({});
   const [cycles,       setCycles]       = useState([]);
   const [loading,      setLoading]      = useState(true);
@@ -134,6 +143,20 @@ export default function WeeklyPage({ role }) {
         .gte("deduct_date", dateFrom).lte("deduct_date", dateTo);
       setAdvances(adv || []);
 
+      // v5: รายได้พิเศษ — ใช้เฉพาะ OT ก่อน
+      const { data: ei } = await supabase
+        .from("extra_income_entries")
+        .select("employee_id, amount, disburse_on, cycle_id, income_type")
+        .eq("period_id", per.id);
+      setExtraIncome(ei || []);
+
+      // v5: map pay_cycle id → cycle_date (ใช้จับคู่ OT เข้ารอบเสาร์)
+      const { data: pcs } = await supabase
+        .from("pay_cycles").select("id, cycle_date").eq("period_id", per.id);
+      const pcMap = {};
+      (pcs || []).forEach(c => { pcMap[c.id] = c.cycle_date; });
+      setCycleDateMap(pcMap);
+
       const { data: vList } = await supabase
         .from("payout_vouchers").select("*").eq("period_id", per.id);
       const vMap = {};
@@ -164,32 +187,63 @@ export default function WeeklyPage({ role }) {
     return getAdvancesInCycle(empId, cycle).reduce((s,a) => s + parseFloat(a.amount||0), 0);
   }
 
+  // v5: OT ที่ถูกจัดสรรเข้ารอบเสาร์นี้ (จาก extraAssign ด้านล่าง)
+  function getExtraInCycle(empId, cycle) {
+    if (cycle.isMonthEnd) return 0;
+    return extraAssign[empId]?.[getCycleKey(cycle)] || 0;
+  }
+
   function getSaturdayRows(cycle) {
     return payrolls
       .filter(r => r.employees?.pay_schedule !== "end_of_month")
       .map(r => {
         const logs   = getLogsInCycle(r.employee_id, cycle);
         const { workDays, wage } = calcCycleWageForEmployee(r, logs);
+        const extra  = getExtraInCycle(r.employee_id, cycle);          // v5: OT รอบนี้
         const advAmt = getAdvanceInCycle(r.employee_id, cycle);
         const advItems = getAdvancesInCycle(r.employee_id, cycle);
-        const toPay  = Math.max(0, parseFloat((wage - advAmt).toFixed(2)));
-        return { record: r, workDays, wage, advAmt, advItems, toPay };
+        const toPay  = Math.max(0, parseFloat((wage + extra - advAmt).toFixed(2)));
+        return { record: r, workDays, wage, extra, advAmt, advItems, toPay };
       })
-      .filter(row => row.workDays > 0 || row.advAmt > 0);
+      .filter(row => row.workDays > 0 || row.advAmt > 0 || row.extra > 0);
   }
 
   function getEmpSaturdayTotal(r) {
     if (r.employees?.pay_schedule === "end_of_month") return 0;
     return cycles.filter(c => !c.isMonthEnd).reduce((sum, c) => {
       const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c));
+      const extra = getExtraInCycle(r.employee_id, c);
       const adv = getAdvanceInCycle(r.employee_id, c);
-      return sum + Math.max(0, wage - adv);
+      return sum + Math.max(0, wage + extra - adv);
     }, 0);
   }
 
   function getMonthEndPay(r) {
     const net = r.net_pay != null ? r.net_pay : (r.total_income||0)-(r.total_deduct||0);
     return parseFloat((net - getEmpSaturdayTotal(r)).toFixed(2));
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // v5: จัดสรร OT ติดป้าย "จ่ายเสาร์" ลงรอบเสาร์ที่ถูกต้อง
+  //   - ตาม cycle_date ที่ HR เลือก (ถ้าจับคู่ได้)
+  //   - จับไม่ได้ / ไม่มี cycle_id → รอบเสาร์สุดท้ายที่มีจริง
+  // ════════════════════════════════════════════════════════════
+  const saturdayCycles = cycles.filter(c => !c.isMonthEnd);
+  const extraAssign = {}; // empId → { cycleKey → amount }
+  for (const e of extraIncome) {
+    if (e.income_type !== "ot") continue;          // v5: เฉพาะ OT ก่อน
+    if (e.disburse_on !== "saturday") continue;    // สิ้นเดือน → ตกในก้อนสิ้นเดือนเอง
+    const targetDate = e.cycle_id ? cycleDateMap[e.cycle_id] : null;
+    let target = null;
+    if (targetDate) {
+      target = saturdayCycles.find(c =>
+        toLocalDateStr(c.dateFrom) <= targetDate && targetDate <= toLocalDateStr(c.dateTo));
+    }
+    if (!target) target = saturdayCycles[saturdayCycles.length - 1]; // fallback รอบสุดท้าย
+    if (!target) continue;                          // ไม่มีรอบเสาร์เลย → ปล่อยตกสิ้นเดือน
+    const key = getCycleKey(target);
+    if (!extraAssign[e.employee_id]) extraAssign[e.employee_id] = {};
+    extraAssign[e.employee_id][key] = (extraAssign[e.employee_id][key] || 0) + Number(e.amount || 0);
   }
 
   const allNetTotal      = payrolls.reduce((s,r) => s + (r.net_pay ?? (r.total_income||0)-(r.total_deduct||0)), 0);
@@ -204,6 +258,7 @@ export default function WeeklyPage({ role }) {
       emp_code:    row.record.employees?.emp_code,
       nickname:    row.record.employees?.nickname,
       work_days:   row.workDays, wage: row.wage,
+      ot:          row.extra || 0,
       advance:     row.advAmt,  to_pay: row.toPay,
     }));
   }
@@ -331,12 +386,12 @@ export default function WeeklyPage({ role }) {
               : <div style={{ overflowX:"auto" }}>
                   <table style={s.table}>
                     <thead><tr>
-                      {["รหัส","ชื่อ","ประเภท","วันทำ","ค่าแรงรอบนี้","เบิกในรอบ","จ่ายเสาร์",""].map(h => (
+                      {["รหัส","ชื่อ","ประเภท","วันทำ","ค่าแรงรอบนี้","OT","เบิกในรอบ","จ่ายเสาร์",""].map(h => (
                         <th key={h} style={s.th}>{h}</th>
                       ))}
                     </tr></thead>
                     <tbody>
-                      {rows.map(({ record:r, workDays, wage, advAmt, advItems, toPay }) => (
+                      {rows.map(({ record:r, workDays, wage, extra, advAmt, advItems, toPay }) => (
                         <tr key={r.employee_id} style={s.tr}>
                           <td style={{ ...s.td, color:"#94a3b8", fontSize:12 }}>{r.employees?.emp_code}</td>
                           <td style={{ ...s.td, fontWeight:700 }}>
@@ -348,6 +403,9 @@ export default function WeeklyPage({ role }) {
                           </td>
                           <td style={{ ...s.td, textAlign:"right" }}>{workDays} วัน</td>
                           <td style={{ ...s.td, textAlign:"right" }}>{fmt(wage)}</td>
+                          <td style={{ ...s.td, textAlign:"right", color: extra>0?"#16a34a":"#9ca3af" }}>
+                            {extra > 0 ? fmt(extra) : "—"}
+                          </td>
                           <td style={{ ...s.td, textAlign:"right", color: advAmt>0?"#dc2626":"#9ca3af" }}>
                             {advAmt > 0 ? `(${fmt(advAmt)})` : "—"}
                           </td>
@@ -356,7 +414,7 @@ export default function WeeklyPage({ role }) {
                           </td>
                           <td style={{ ...s.td, textAlign:"center" }}>
                             <button
-                              onClick={() => setDetail({ record:r, workDays, wage, advAmt, advItems, toPay, cycleLabel:`รอบที่ ${ci+1}`, cycleFrom: cycle.dateFrom, cycleTo: cycle.dateTo })}
+                              onClick={() => setDetail({ record:r, workDays, wage, extra, advAmt, advItems, toPay, cycleLabel:`รอบที่ ${ci+1}`, cycleFrom: cycle.dateFrom, cycleTo: cycle.dateTo })}
                               style={s.glassBtn}>🔍</button>
                           </td>
                         </tr>
@@ -364,7 +422,7 @@ export default function WeeklyPage({ role }) {
                     </tbody>
                     <tfoot>
                       <tr style={{ background:"#f0f4f8" }}>
-                        <td style={s.td} colSpan={6}><span style={{ fontWeight:700 }}>รวม</span></td>
+                        <td style={s.td} colSpan={7}><span style={{ fontWeight:700 }}>รวม</span></td>
                         <td style={{ ...s.td, textAlign:"right", fontWeight:800, fontSize:17, color:"#1e3a5f" }}>{fmtInt(totalPay)}</td>
                         <td style={s.td} />
                       </tr>
@@ -386,7 +444,7 @@ export default function WeeklyPage({ role }) {
       {/* สิ้นเดือน */}
       {!loading && payrolls.length > 0 && (() => {
         const meRows    = sortByEmpCode(payrolls).map(r => ({
-          record: r, workDays:0, wage:0,
+          record: r, workDays:0, wage:0, extra:0,
           advAmt: getEmpSaturdayTotal(r), advItems: [],
           toPay:  getMonthEndPay(r),
         }));
@@ -516,7 +574,7 @@ function VoucherInfo({ voucher }) {
         <div style={{ marginTop:8, overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
             <thead><tr>
-              {["รหัส","ชื่อ","วันทำ","ค่าแรง","เบิก","จ่าย"].map(h => (
+              {["รหัส","ชื่อ","วันทำ","ค่าแรง","OT","เบิก","จ่าย"].map(h => (
                 <th key={h} style={{ padding:"4px 8px", textAlign:h==="รหัส"||h==="ชื่อ"?"left":"right",
                   background:"#f1f5f9", borderBottom:"1px solid #e2e8f0" }}>{h}</th>
               ))}
@@ -528,6 +586,9 @@ function VoucherInfo({ voucher }) {
                   <td style={{ padding:"4px 8px" }}>{l.nickname}</td>
                   <td style={{ padding:"4px 8px", textAlign:"right" }}>{l.work_days} วัน</td>
                   <td style={{ padding:"4px 8px", textAlign:"right" }}>{Number(l.wage||0).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                  <td style={{ padding:"4px 8px", textAlign:"right", color:l.ot>0?"#16a34a":"#9ca3af" }}>
+                    {l.ot > 0 ? Number(l.ot).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—"}
+                  </td>
                   <td style={{ padding:"4px 8px", textAlign:"right", color:l.advance>0?"#dc2626":"#9ca3af" }}>
                     {l.advance > 0 ? `(${Number(l.advance).toLocaleString("th-TH")})` : "—"}
                   </td>
@@ -617,15 +678,22 @@ function DetailModal({ detail, onClose }) {
               <CalcRow label="ค่าแรงปกติทั้งเดือน" value={fmtInt(r.base_wage)} unit="บาท" />
               <CalcRow label={`÷ วันทำงาน (${r.work_days} วัน)`} value={fmt(r.base_wage / r.work_days)} unit="บาท/วัน" />
               <CalcRow label={`× วันทำในรอบนี้ (${detail.workDays} วัน)`} value={fmt(detail.wage)} unit="บาท" highlight />
-              {detail.advAmt > 0 && (
+              {(detail.extra > 0 || detail.advAmt > 0) && (
                 <>
                   <div style={{ borderTop:"1px dashed #e2e8f0", margin:"6px 0" }} />
-                  <div style={{ fontWeight:600, color:"#374151", fontSize:12, marginBottom:4 }}>รายการเบิกในรอบนี้</div>
-                  {(detail.advItems || []).map((a, i) => (
-                    <CalcRow key={i}
-                      label={`− ${a.deduction_types?.name || "เบิก"} (${a.deduct_date})`}
-                      value={`(${fmt(a.amount)})`} red />
-                  ))}
+                  {detail.extra > 0 && (
+                    <CalcRow label="+ OT (จ่ายรอบนี้)" value={`+${fmt(detail.extra)}`} green />
+                  )}
+                  {detail.advAmt > 0 && (
+                    <>
+                      <div style={{ fontWeight:600, color:"#374151", fontSize:12, margin:"4px 0" }}>รายการเบิกในรอบนี้</div>
+                      {(detail.advItems || []).map((a, i) => (
+                        <CalcRow key={i}
+                          label={`− ${a.deduction_types?.name || "เบิก"} (${a.deduct_date})`}
+                          value={`(${fmt(a.amount)})`} red />
+                      ))}
+                    </>
+                  )}
                   <CalcRow label="= จ่ายจริงวันเสาร์" value={fmtInt(detail.toPay)} unit="บาท" bold green />
                 </>
               )}
@@ -690,7 +758,7 @@ function Section({ title, children }) {
 function CalcRow({ label, value, unit, bold, green, red, highlight }) {
   return (
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-      padding:"4px 0", borderBottom:"1px solid #f1f5f9",
+      borderBottom:"1px solid #f1f5f9",
       background: highlight ? "#eff6ff" : "transparent",
       borderRadius: highlight ? 6 : 0, padding: highlight ? "4px 6px" : "4px 0",
     }}>
