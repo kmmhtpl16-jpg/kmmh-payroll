@@ -255,6 +255,7 @@ export default function WeeklyPage({ role }) {
       employee_id: row.record.employee_id,
       emp_code:    row.record.employees?.emp_code,
       nickname:    row.record.employees?.nickname,
+      full_name:   row.record.employees?.full_name,
       work_days:   row.workDays, wage: row.wage,
       ot:          row.extra || 0,
       advance:     row.advAmt,  to_pay: row.toPay,
@@ -340,6 +341,11 @@ export default function WeeklyPage({ role }) {
       (a,b) => (a.emp_code||"").localeCompare(b.emp_code||"", undefined, { numeric:true })
     );
 
+    // ชื่อจริง: ใช้จาก snapshot ก่อน; ถ้า voucher เก่าไม่มี → ดึงสดจากพนักงานปัจจุบัน
+    const nameMap = {};
+    payrolls.forEach(r => { nameMap[r.employee_id] = r.employees?.full_name; });
+    const fullNameOf = (l) => l.full_name || nameMap[l.employee_id] || "";
+
     const money = (n) => Number(n||0).toLocaleString("th-TH",{ minimumFractionDigits:2, maximumFractionDigits:2 });
     const esc   = (str) => String(str==null?"":str).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
 
@@ -364,6 +370,7 @@ export default function WeeklyPage({ role }) {
     }
 
     function slipHtml(l) {
+      const fname = esc(fullNameOf(l));
       return `
         <div class="slip">
           <div class="head">
@@ -371,7 +378,10 @@ export default function WeeklyPage({ role }) {
             <div class="sub">สลิปเงินเดือน ${esc(monthLabel)}</div>
           </div>
           <div class="who">
-            <span class="name">${esc(l.emp_code)} · ${esc(l.nickname)}</span>
+            <div class="who-l">
+              <div class="name">${esc(l.emp_code)} · ${esc(l.nickname)}</div>
+              ${fname ? `<div class="fullname">${fname}</div>` : ""}
+            </div>
             <span class="cyc">${esc(cycleLabel)}</span>
           </div>
           <div class="body">${slipRows(l)}</div>
@@ -404,9 +414,10 @@ export default function WeeklyPage({ role }) {
         .head { text-align:center; border-bottom:2px solid #1e3a5f; padding-bottom:4mm; margin-bottom:4mm; }
         .co { font-size:18px; font-weight:800; color:#1e3a5f; }
         .sub { font-size:13px; color:#64748b; margin-top:2px; }
-        .who { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5mm; }
+        .who { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:5mm; }
         .name { font-size:16px; font-weight:700; }
-        .cyc { font-size:12px; color:#64748b; }
+        .fullname { font-size:12px; color:#475569; margin-top:1mm; }
+        .cyc { font-size:12px; color:#64748b; white-space:nowrap; }
         .body { font-size:14px; }
         .row { display:flex; justify-content:space-between; padding:2.2mm 0; }
         .row span:last-child { font-variant-numeric:tabular-nums; }
