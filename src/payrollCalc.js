@@ -370,6 +370,7 @@ export async function savePayrollResults(year, month, results) {
     ot_amount:          r.ot_amount,
     position_allowance: r.position_allowance,
     diligence_bonus:    r.diligence_bonus,
+    other_income:       r.other_income,
     late_deduct:        r.late_deduct,
     leave_deduct:       r.leave_deduct,
     social_security:    r.social_security,
