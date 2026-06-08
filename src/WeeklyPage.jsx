@@ -319,6 +319,126 @@ export default function WeeklyPage({ role }) {
     } catch(e) { setMsg({ type:"error", text:"❌ "+e.message }); }
   }
 
+  // ════════════════════════════════════════════════════════════
+  // พิมพ์ slip (A4 · 2 คน/แผ่น) — ดึงจาก voucher.lines (snapshot)
+  //   - รอบเสาร์ : ค่าแรงรอบนี้ / OT-อื่นๆ / เบิกในรอบ / จ่ายจริง
+  //   - สิ้นเดือน : สุทธิทั้งเดือน / จ่ายเสาร์แล้ว / จ่ายสิ้นเดือน
+  // ════════════════════════════════════════════════════════════
+  function printVoucherSlips(voucher) {
+    if (!voucher || !(voucher.lines || []).length) {
+      setMsg({ type:"warn", text:"⚠️ ไม่มีข้อมูลใบเบิกให้พิมพ์" });
+      return;
+    }
+    const isMonthEnd = !voucher.cycle_date;
+    const beYear     = period.year < 2500 ? period.year + 543 : period.year;
+    const monthLabel = `${MONTHS_SHORT[month]} ${beYear}`;
+    const cycleLabel = isMonthEnd
+      ? "จ่ายสิ้นเดือน"
+      : `รอบเสาร์ · ถึง ${fmtDate(new Date(voucher.cycle_date + "T00:00:00"))}`;
+
+    const lines = [...voucher.lines].sort(
+      (a,b) => (a.emp_code||"").localeCompare(b.emp_code||"", undefined, { numeric:true })
+    );
+
+    const money = (n) => Number(n||0).toLocaleString("th-TH",{ minimumFractionDigits:2, maximumFractionDigits:2 });
+    const esc   = (str) => String(str==null?"":str).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+
+    function slipRows(l) {
+      if (isMonthEnd) {
+        const sat = Number(l.advance||0);
+        const net = sat + Number(l.to_pay||0);
+        return `
+          <div class="row"><span>สุทธิทั้งเดือน</span><span>${money(net)}</span></div>
+          <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
+          <div class="line"></div>
+          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>`;
+      }
+      const ot  = Number(l.ot||0);
+      const adv = Number(l.advance||0);
+      return `
+        <div class="row"><span>ค่าแรงรอบนี้ (${l.work_days||0} วัน)</span><span>${money(l.wage)}</span></div>
+        ${ot  > 0 ? `<div class="row"><span>OT / รายได้อื่นๆ</span><span class="green">${money(ot)}</span></div>` : ""}
+        ${adv > 0 ? `<div class="row"><span>เบิกในรอบ</span><span class="red">(${money(adv)})</span></div>` : ""}
+        <div class="line"></div>
+        <div class="row total"><span>จ่ายจริง</span><span>${money(l.to_pay)}</span></div>`;
+    }
+
+    function slipHtml(l) {
+      return `
+        <div class="slip">
+          <div class="head">
+            <div class="co">KMMH · กิจมั่งมีโฮม</div>
+            <div class="sub">สลิปเงินเดือน ${esc(monthLabel)}</div>
+          </div>
+          <div class="who">
+            <span class="name">${esc(l.emp_code)} · ${esc(l.nickname)}</span>
+            <span class="cyc">${esc(cycleLabel)}</span>
+          </div>
+          <div class="body">${slipRows(l)}</div>
+          <div class="sign">
+            <div class="sigline"></div>
+            <div class="siglabel">ลายเซ็นผู้รับเงิน</div>
+            <div class="sigdate">วันที่ ........./........./.........</div>
+          </div>
+        </div>`;
+    }
+
+    // จัด 2 ใบ/แผ่น
+    const sheets = [];
+    for (let i = 0; i < lines.length; i += 2) {
+      const pair = lines.slice(i, i + 2).map(slipHtml).join('<div class="cut"></div>');
+      sheets.push(`<div class="sheet">${pair}</div>`);
+    }
+
+    const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
+      <title>สลิป ${esc(cycleLabel)}</title>
+      <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:'Sarabun','Tahoma',sans-serif; color:#1e293b; }
+        @page { size:A4 portrait; margin:0; }
+        .sheet { width:210mm; height:297mm; padding:12mm 14mm; page-break-after:always; }
+        .sheet:last-child { page-break-after:auto; }
+        .cut { border-top:1px dashed #94a3b8; margin:6mm 0; position:relative; }
+        .cut::after { content:"✂"; position:absolute; left:-2mm; top:-3mm; font-size:11px; color:#94a3b8; }
+        .slip { border:1px solid #cbd5e1; border-radius:6px; padding:8mm 10mm; }
+        .head { text-align:center; border-bottom:2px solid #1e3a5f; padding-bottom:4mm; margin-bottom:4mm; }
+        .co { font-size:18px; font-weight:800; color:#1e3a5f; }
+        .sub { font-size:13px; color:#64748b; margin-top:2px; }
+        .who { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5mm; }
+        .name { font-size:16px; font-weight:700; }
+        .cyc { font-size:12px; color:#64748b; }
+        .body { font-size:14px; }
+        .row { display:flex; justify-content:space-between; padding:2.2mm 0; }
+        .row span:last-child { font-variant-numeric:tabular-nums; }
+        .green { color:#166534; }
+        .red { color:#b91c1c; }
+        .line { border-top:1px solid #e2e8f0; margin:1.5mm 0; }
+        .total { font-size:17px; font-weight:800; color:#1e3a5f; padding-top:2mm; }
+        .sign { margin-top:10mm; text-align:right; }
+        .sigline { border-bottom:1px solid #1e293b; width:60mm; margin-left:auto; }
+        .siglabel { font-size:12px; color:#64748b; margin-top:1.5mm; }
+        .sigdate { font-size:12px; color:#64748b; margin-top:2mm; }
+      </style></head><body>${sheets.join("")}</body></html>`;
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0"; iframe.style.bottom = "0";
+    iframe.style.width = "0"; iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch(e) {
+        setMsg({ type:"error", text:"❌ พิมพ์ไม่สำเร็จ: " + e.message });
+      }
+      setTimeout(() => { document.body.removeChild(iframe); }, 1000);
+    };
+  }
+
   return (
     <div style={s.page}>
       <div style={s.header}>
@@ -434,7 +554,8 @@ export default function WeeklyPage({ role }) {
               totalPay={totalPay} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher(cycle, rows, false)}
               onApprove={() => approveVoucher(cycleKey)}
-              onReturn={() => setReturnModal({ cycleKey })} />
+              onReturn={() => setReturnModal({ cycleKey })}
+              onPrint={() => printVoucherSlips(voucher)} />
           </div>
         );
       })}
@@ -518,6 +639,7 @@ export default function WeeklyPage({ role }) {
               onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
               onApprove={() => approveVoucher("month_end")}
               onReturn={() => setReturnModal({ cycleKey:"month_end" })}
+              onPrint={() => printVoucherSlips(voucherMe)}
               purple />
           </div>
         );
@@ -603,7 +725,7 @@ function VoucherInfo({ voucher }) {
   );
 }
 
-function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, approving, onSubmit, onApprove, onReturn, purple }) {
+function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, approving, onSubmit, onApprove, onReturn, onPrint, purple }) {
   const status   = voucher?.status;
   const btnColor = purple ? "#7c3aed" : "#1e3a5f";
   return (
@@ -625,9 +747,12 @@ function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, a
         </>
       )}
       {status === "approved" && (
-        <span style={{ fontSize:12, color:"#16a34a", fontWeight:700 }}>
-          ✅ อนุมัติแล้ว • {new Date(voucher.approved_at).toLocaleString("th-TH")}
-        </span>
+        <>
+          <span style={{ fontSize:12, color:"#16a34a", fontWeight:700 }}>
+            ✅ อนุมัติแล้ว • {new Date(voucher.approved_at).toLocaleString("th-TH")}
+          </span>
+          <button onClick={onPrint} style={{ ...s.markBtn, background:"#0369a1" }}>🖨️ พิมพ์ slip</button>
+        </>
       )}
       <span style={{ fontSize:12, color:"#94a3b8", marginLeft:"auto" }}>รวม {fmtInt(totalPay)} บาท</span>
     </div>
