@@ -2,6 +2,8 @@
 // หน้าเงินเดือน — ภาพรวมทั้งเดือนรายคน
 // 🔧 v3: เลิกแยกเสาร์/สิ้นเดือน — แสดงรายได้รวม / รายหักรวม / สุทธิ ทั้งเดือน
 //        (การแยกรอบจ่ายย้ายไปหน้า 📅 รายอาทิตย์)
+// 🔧 v4: ตอนกด "บันทึกลง DB" ระบบจะเตรียมรายการ OT ลงหน้ารายได้พิเศษให้
+//        อัตโนมัติ (ตั้งต้นจ่ายสิ้นเดือน) — ยอดสุทธิหน้านี้ยังรวม OT ตามเดิม
 import { useState } from "react";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
 import { exportPayrollExcel } from "./payrollExport";
@@ -40,8 +42,15 @@ export default function PayrollPage({ role }) {
     if (!result) return;
     setSaving(true);
     try {
-      await savePayrollResults(year - 543, month, result.results);
-      setMsg({ type: "ok", text: `✅ บันทึก payroll_records ${result.results.length} คน สำเร็จ` });
+      const res = await savePayrollResults(year - 543, month, result.results);
+      let text = `✅ บันทึกเงินเดือน ${result.results.length} คน สำเร็จ`;
+      const ot = res?.ot;
+      const otParts = [];
+      if (ot?.created) otParts.push(`เพิ่ม OT ${ot.created} คน`);
+      if (ot?.updated) otParts.push(`อัปเดต OT ${ot.updated} คน`);
+      if (ot?.removed) otParts.push(`เอา OT ออก ${ot.removed} คน`);
+      if (otParts.length) text += " · รายได้พิเศษ: " + otParts.join(" · ");
+      setMsg({ type: "ok", text });
     } catch (e) {
       setMsg({ type: "error", text: "❌ " + e.message });
     } finally { setSaving(false); }
