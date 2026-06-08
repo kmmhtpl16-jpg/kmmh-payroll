@@ -1,9 +1,21 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v4
+// คำนวณเงินเดือน KMMH — v5
 // Logic ตาม KMMH_payroll_logic_v2.md
 //
-// 🔧 v4 เปลี่ยนจาก v3:
+// 🔧 v5 เปลี่ยนจาก v4:
+//   • OT: ตอนกด "บันทึกลง DB" จะสร้าง/อัปเดตรายการ OT ลง
+//     extra_income_entries ให้อัตโนมัติ (ตัวจริงของรอบจ่าย OT)
+//     - OT > 0 และยังไม่มีรายการ → สร้างใหม่ (ตั้งต้นจ่ายสิ้นเดือน)
+//     - OT > 0 และมีรายการแล้ว แต่ HR ยังไม่แก้มือ → อัปเดตเฉพาะ "ยอด"
+//       (ไม่แตะรอบจ่ายที่ HR เลือกไว้)
+//     - HR แก้มือแล้ว (is_overridden) → ไม่แตะอะไรเลย
+//     - OT = 0 และมีรายการ auto ค้างอยู่ → ลบทิ้ง (กันบรรทัดขยะ)
+//   • net_pay หน้าเงินเดือนยัง "รวม OT" เหมือนเดิม (ทาง A) —
+//     extra_income แค่บอกว่า OT ก้อนนี้ออกรอบไหน ไม่บวกซ้ำ
+//     (สิ้นเดือน = net_pay − เสาร์ที่จ่ายแล้ว → นับ OT ครั้งเดียว)
+//
+// 🔧 v4 (เดิม):
 //   • ค่าแรงวันอาทิตย์ (holiday_wage) — นับอาทิตย์ทั้งเดือนจาก "ปฏิทิน"
 //     ไม่ใช่จาก attendance_logs (เพราะอาทิตย์ร้านหยุด ไม่มีบันทึกเวลา)
 //   • holiday_wage เฉพาะพนักงาน "ประจำ" เท่านั้น — ทดลองงานไม่ได้
@@ -308,6 +320,8 @@ export async function calcPayroll(year, month) {
 
 // ════════════════════════════════════════════════════════════
 // savePayrollResults — บันทึกลง payroll_records
+//   + sync รายการ OT เข้า extra_income_entries (v5)
+// คืน { ot: { created, updated, removed } }
 // ════════════════════════════════════════════════════════════
 export async function savePayrollResults(year, month, results) {
   const { data: period, error: pErr } = await supabase
@@ -347,4 +361,97 @@ export async function savePayrollResults(year, month, results) {
     .upsert(records, { onConflict: "period_id,employee_id" });
 
   if (error) throw new Error("บันทึกไม่สำเร็จ: " + error.message);
+
+  // ── sync OT → extra_income_entries ──
+  const ot = await syncOtExtraIncome(period.id, results);
+
+  return { ot };
+}
+
+// ════════════════════════════════════════════════════════════
+// syncOtExtraIncome — สร้าง/อัปเดต/ลบ รายการ OT ใน extra_income_entries
+//   ให้ตรงกับยอด OT ที่เพิ่งคำนวณ โดย:
+//   • ไม่แตะรอบจ่าย (disburse_on / cycle_id) ที่ HR เลือกไว้
+//   • ไม่แตะยอดที่ HR แก้มือแล้ว (is_overridden = true)
+// ════════════════════════════════════════════════════════════
+async function syncOtExtraIncome(periodId, results) {
+  // โหลดรายการ OT ที่มีอยู่แล้วในงวดนี้
+  const { data: existing, error: exErr } = await supabase
+    .from("extra_income_entries")
+    .select("id, employee_id, is_overridden")
+    .eq("period_id", periodId)
+    .eq("income_type", "ot");
+  if (exErr) throw new Error("โหลดรายการ OT (รายได้พิเศษ) ไม่ได้: " + exErr.message);
+
+  // map: employee_id → row (ปกติคนละ 1 รายการ เอาตัวแรกพอ)
+  const existMap = {};
+  (existing || []).forEach(e => {
+    if (!existMap[e.employee_id]) existMap[e.employee_id] = e;
+  });
+
+  // ผู้บันทึกปัจจุบัน (สำหรับ row ที่สร้างใหม่)
+  let createdBy = null;
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    createdBy = user?.id || null;
+  } catch (_) { /* ไม่มี user ก็ปล่อย null */ }
+
+  const toInsert = [];
+  const toUpdate = []; // { id, amount, note }
+  const toDelete = []; // [id, ...]
+
+  for (const r of results) {
+    const otAmount = Number(r.ot_amount || 0);
+    const note = `${r.ot_hours} ชม.`;
+    const cur = existMap[r.employee_id];
+
+    if (otAmount > 0) {
+      if (!cur) {
+        // ยังไม่มี → สร้างใหม่ ตั้งต้นจ่ายสิ้นเดือน
+        toInsert.push({
+          employee_id:     r.employee_id,
+          period_id:       periodId,
+          income_type:     "ot",
+          label:           null,
+          amount:          otAmount,
+          amount_note:     note,
+          disburse_on:     "month_end",
+          cycle_id:        null,
+          is_overridden:   false,
+          override_reason: null,
+          created_by:      createdBy,
+          updated_at:      new Date().toISOString(),
+        });
+      } else if (!cur.is_overridden) {
+        // มีแล้ว + HR ยังไม่แก้มือ → อัปเดตเฉพาะยอด (ไม่แตะรอบจ่าย)
+        toUpdate.push({ id: cur.id, amount: otAmount, note });
+      }
+      // มีแล้ว + HR แก้มือ → ไม่แตะอะไรเลย
+    } else {
+      // OT = 0 → ถ้ามี row auto ค้างอยู่ (ไม่ได้แก้มือ) → ลบทิ้ง
+      if (cur && !cur.is_overridden) toDelete.push(cur.id);
+      // ไม่มี row / HR แก้มือ → ปล่อยไว้
+    }
+  }
+
+  if (toInsert.length) {
+    const { error } = await supabase.from("extra_income_entries").insert(toInsert);
+    if (error) throw new Error("สร้างรายการ OT ไม่สำเร็จ: " + error.message);
+  }
+  for (const u of toUpdate) {
+    const { error } = await supabase
+      .from("extra_income_entries")
+      .update({ amount: u.amount, amount_note: u.note, updated_at: new Date().toISOString() })
+      .eq("id", u.id);
+    if (error) throw new Error("อัปเดตรายการ OT ไม่สำเร็จ: " + error.message);
+  }
+  if (toDelete.length) {
+    const { error } = await supabase
+      .from("extra_income_entries")
+      .delete()
+      .in("id", toDelete);
+    if (error) throw new Error("ลบรายการ OT ที่เป็น 0 ไม่สำเร็จ: " + error.message);
+  }
+
+  return { created: toInsert.length, updated: toUpdate.length, removed: toDelete.length };
 }
