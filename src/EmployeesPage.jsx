@@ -10,8 +10,16 @@ const COLORS = [
 ]
 
 const fmtRate = (n) => n ? Number(n).toLocaleString('th-TH') : '-'
+const fmtMoney = (n) => Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const getInitials = (name) => (name || '??').substring(0, 2)
 const getColor = (i) => COLORS[i % COLORS.length]
+
+// แปลงวันที่ ค.ศ. → แสดง พ.ศ. (เช่น 2026-06-17 → 17/06/2569)
+const toBE = (iso) => {
+  if (!iso) return '-'
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${Number(y) + 543}`
+}
 
 const EMPTY_FORM = {
   emp_code: '', nickname: '', full_name: '',
@@ -29,9 +37,16 @@ export default function EmployeesPage() {
   const [filterStatus, setFilterStatus] = useState('active')
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState(null)
+  const [editIsActive, setEditIsActive] = useState(true)   // 🆕 เก็บสถานะเดิม กันบั๊กปลุกกลับมา
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState(null)
+
+  // 🆕 state สำหรับ popup ลาออก
+  const [resignModal, setResignModal] = useState(null)   // { emp } | null
+  const [resignDate, setResignDate] = useState('')
+  const [insBalance, setInsBalance] = useState(null)     // ยอดประกันคงเหลือ (null = กำลังโหลด)
+  const [resignSaving, setResignSaving] = useState(false)
 
   useEffect(() => { fetchEmployees() }, [])
 
@@ -48,7 +63,7 @@ export default function EmployeesPage() {
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
-    setTimeout(() => setToast(null), 3000)
+    setTimeout(() => setToast(null), 3500)
   }
 
   const filtered = employees.filter(e => {
@@ -70,6 +85,7 @@ export default function EmployeesPage() {
   function openModal(emp = null) {
     if (emp) {
       setEditId(emp.id)
+      setEditIsActive(emp.is_active)   // 🆕 จำสถานะเดิมไว้
       setForm({
         emp_code: emp.emp_code || '',
         nickname: emp.nickname || '',
@@ -87,6 +103,7 @@ export default function EmployeesPage() {
       })
     } else {
       setEditId(null)
+      setEditIsActive(true)            // 🆕 เพิ่มใหม่ = active
       setForm(EMPTY_FORM)
     }
     setModalOpen(true)
@@ -116,7 +133,9 @@ export default function EmployeesPage() {
       app_fee_status: form.app_fee_status,
       trial_start_date: form.trial_start_date || null,
       permanent_start_date: form.emp_type === 'permanent' ? form.permanent_start_date || null : null,
-      is_active: true,
+      // 🔧 บั๊กเดิม: เคย hardcode true เสมอ → คนลาออกจะถูกปลุกกลับมา
+      //    แก้: ตอนแก้ไข ใช้สถานะเดิม / ตอนเพิ่มใหม่ = true
+      is_active: editId ? editIsActive : true,
     }
     let error
     if (editId) {
@@ -131,12 +150,64 @@ export default function EmployeesPage() {
     fetchEmployees()
   }
 
-  async function toggleActive(emp) {
-    const { error } = await supabase
-      .from('employees').update({ is_active: !emp.is_active }).eq('id', emp.id)
-    if (error) showToast('แก้ไขไม่ได้: ' + error.message, 'error')
-    else { showToast(emp.is_active ? 'บันทึกการลาออกแล้ว' : 'กลับมาทำงานแล้ว'); fetchEmployees() }
+  // 🆕 เปิด popup ลาออก + โหลดยอดประกันสด
+  async function openResign(emp) {
+    setResignModal({ emp })
+    // default วันลาออก = วันนี้ (รูปแบบ YYYY-MM-DD)
+    const today = new Date()
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    setResignDate(iso)
+    setInsBalance(null)
+    // โหลดยอดประกันคงเหลือจากวิว v_insurance_balance
+    const { data, error } = await supabase
+      .from('v_insurance_balance')
+      .select('balance')
+      .eq('employee_id', emp.id)
+      .maybeSingle()
+    if (error) {
+      setInsBalance(0)   // ดึงไม่ได้ → ถือว่า 0 ไว้ก่อน
+    } else {
+      setInsBalance(Number(data?.balance || 0))
+    }
   }
+
+  function closeResign() {
+    setResignModal(null)
+    setResignDate('')
+    setInsBalance(null)
+  }
+
+  // 🆕 ยืนยันลาออก: บันทึก resigned_date + ปิด is_active
+  async function confirmResign() {
+    if (!resignModal) return
+    if (!resignDate) { showToast('กรุณาเลือกวันที่ลาออก', 'error'); return }
+    setResignSaving(true)
+    const { error } = await supabase
+      .from('employees')
+      .update({ resigned_date: resignDate, is_active: false })
+      .eq('id', resignModal.emp.id)
+    setResignSaving(false)
+    if (error) { showToast('บันทึกลาออกไม่ได้: ' + error.message, 'error'); return }
+    showToast(`บันทึกการลาออก ${resignModal.emp.nickname} (${toBE(resignDate)}) แล้ว ✓`)
+    closeResign()
+    fetchEmployees()
+  }
+
+  // 🆕 กลับมาทำงาน (ล้างวันลาออก)
+  async function reactivate(emp) {
+    if (!window.confirm(`ให้ ${emp.nickname} กลับมาทำงานใช่ไหม? (จะล้างวันลาออกออก)`)) return
+    const { error } = await supabase
+      .from('employees')
+      .update({ is_active: true, resigned_date: null })
+      .eq('id', emp.id)
+    if (error) showToast('แก้ไขไม่ได้: ' + error.message, 'error')
+    else { showToast(`${emp.nickname} กลับมาทำงานแล้ว`); fetchEmployees() }
+  }
+
+  // ── ยอดคืนใน popup ลาออก ──
+  const resignEmp = resignModal?.emp
+  const appRefund = resignEmp?.app_fee_status === 'held' ? 100 : 0
+  const totalRefund = (insBalance || 0) + appRefund
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '1rem', fontFamily: 'sans-serif', fontSize: 14 }}>
@@ -148,7 +219,7 @@ export default function EmployeesPage() {
           background: toast.type === 'error' ? '#FCEBEB' : '#EAF3DE',
           color: toast.type === 'error' ? '#A32D2D' : '#27500A',
           border: `0.5px solid ${toast.type === 'error' ? '#F09595' : '#C0DD97'}`,
-          borderRadius: 8, padding: '10px 16px', fontWeight: 500,
+          borderRadius: 8, padding: '10px 16px', fontWeight: 500, maxWidth: 360,
         }}>{toast.msg}</div>
       )}
 
@@ -227,7 +298,12 @@ export default function EmployeesPage() {
                       </div>
                       <div>
                         <div style={{ fontWeight: 500 }}>{e.nickname} — {e.full_name}</div>
-                        <div style={{ fontSize: 11, color: '#aaa' }}>{e.emp_code || 'ยังไม่มีรหัส'}</div>
+                        <div style={{ fontSize: 11, color: '#aaa' }}>
+                          {e.emp_code || 'ยังไม่มีรหัส'}
+                          {!e.is_active && e.resigned_date && (
+                            <span style={{ color: '#A32D2D', marginLeft: 6 }}>· ออก {toBE(e.resigned_date)}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -248,9 +324,15 @@ export default function EmployeesPage() {
                   <td style={{ padding: '10px 12px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button onClick={() => openModal(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#555' }}>แก้ไข</button>
-                      <button onClick={() => toggleActive(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: e.is_active ? '#A32D2D' : '#27500A' }}>
-                        {e.is_active ? 'ลาออก' : 'กลับมา'}
-                      </button>
+                      {e.is_active ? (
+                        <button onClick={() => openResign(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#A32D2D' }}>
+                          ลาออก
+                        </button>
+                      ) : (
+                        <button onClick={() => reactivate(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#27500A' }}>
+                          กลับมา
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -260,7 +342,7 @@ export default function EmployeesPage() {
         </table>
       </div>
 
-      {/* Modal */}
+      {/* ═══ Modal แก้ไข/เพิ่ม (เดิม) ═══ */}
       {modalOpen && (
         <div onClick={e => e.target === e.currentTarget && closeModal()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: '#fff', borderRadius: 12, padding: '1.5rem', width: '100%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto' }}>
@@ -268,6 +350,14 @@ export default function EmployeesPage() {
               <span style={{ fontWeight: 600, fontSize: 16 }}>{editId ? 'แก้ไขข้อมูลพนักงาน' : 'เพิ่มพนักงานใหม่'}</span>
               <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#aaa' }}>×</button>
             </div>
+
+            {/* 🆕 แจ้งเตือนถ้ากำลังแก้คนที่ลาออกแล้ว */}
+            {editId && !editIsActive && (
+              <div style={{ background: '#FBF3E6', border: '0.5px solid #E8C98C', borderRadius: 8, padding: '8px 12px', marginBottom: 16, fontSize: 12, color: '#7A5418' }}>
+                ⚠️ พนักงานคนนี้ลาออกแล้ว — การแก้ไขนี้จะไม่ทำให้กลับมาทำงาน (สถานะคงเดิม)
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
               {[
                 { label: 'รหัสพนักงาน', key: 'emp_code', placeholder: 'K001', full: false },
@@ -372,6 +462,81 @@ export default function EmployeesPage() {
               <button onClick={closeModal} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: '0.5px solid #ccc', background: 'none', cursor: 'pointer', fontSize: 14 }}>ยกเลิก</button>
               <button onClick={saveEmployee} disabled={saving} style={{ height: 36, padding: '0 20px', borderRadius: 8, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontWeight: 500, fontSize: 14, opacity: saving ? 0.6 : 1 }}>
                 {saving ? 'กำลังบันทึก...' : editId ? 'บันทึกการแก้ไข' : 'บันทึก'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ 🆕 Modal ลาออก ═══ */}
+      {resignModal && (
+        <div onClick={e => e.target === e.currentTarget && closeResign()} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '1.5rem', width: '100%', maxWidth: 460 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>บันทึกการลาออก</span>
+              <button onClick={closeResign} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#aaa' }}>×</button>
+            </div>
+
+            <div style={{ background: '#F7F7F5', borderRadius: 8, padding: '10px 14px', marginBottom: 16 }}>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{resignEmp?.nickname} — {resignEmp?.full_name}</div>
+              <div style={{ fontSize: 12, color: '#888' }}>
+                {resignEmp?.emp_code} · {resignEmp?.emp_type === 'permanent' ? 'ประจำ' : 'ทดลองงาน'}
+              </div>
+            </div>
+
+            {/* วันที่ลาออก */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>วันสุดท้ายที่ทำงาน *</div>
+              <input type="date" value={resignDate} onChange={e => setResignDate(e.target.value)}
+                style={{ width: '100%', height: 36, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+              {resignDate && (
+                <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>= {toBE(resignDate)} (พ.ศ.)</div>
+              )}
+            </div>
+
+            {/* สรุปยอดคืน */}
+            <div style={{ border: '0.5px solid #e5e5e5', borderRadius: 10, overflow: 'hidden', marginBottom: 16 }}>
+              <div style={{ background: '#fafafa', padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#666' }}>
+                ยอดที่ต้องคืนพนักงาน
+              </div>
+              <div style={{ padding: '4px 14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '0.5px solid #f0f0f0' }}>
+                  <span>ประกันงานคงเหลือ</span>
+                  <span style={{ fontWeight: 600 }}>
+                    {insBalance === null ? 'กำลังโหลด...' : `${fmtMoney(insBalance)} บ.`}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '0.5px solid #f0f0f0' }}>
+                  <span>คืนค่าสมัครงาน</span>
+                  <span style={{ fontWeight: 600 }}>
+                    {appRefund > 0 ? `${fmtMoney(appRefund)} บ.` : '— (ไม่ได้หักไว้)'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', fontWeight: 700 }}>
+                  <span>รวมคืน</span>
+                  <span style={{ color: '#085041' }}>
+                    {insBalance === null ? '...' : `${fmtMoney(totalRefund)} บ.`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* คำเตือนเรื่องค่าแรงงวดสุดท้าย */}
+            <div style={{ background: '#EAF1FB', border: '0.5px solid #B9D3F0', borderRadius: 8, padding: '10px 12px', marginBottom: 16, fontSize: 12, color: '#1A4B82', lineHeight: 1.6 }}>
+              💡 ยอดข้างบนคือ <b>เงินคืนที่ผูกกับการลาออก</b> เท่านั้น<br />
+              <b>ค่าแรงงวดสุดท้าย</b> (ตามวันทำงานจริง − สาย − ปกส.) ให้ไปกดคำนวณที่หน้า <b>เงินเดือน</b> เดือนที่ลาออก — ระบบจะรวมเงินคืนข้างบนให้อัตโนมัติ
+            </div>
+
+            {insBalance === 0 && resignEmp?.insurance_level !== 'none' && (
+              <div style={{ background: '#FBF3E6', border: '0.5px solid #E8C98C', borderRadius: 8, padding: '10px 12px', marginBottom: 16, fontSize: 12, color: '#7A5418', lineHeight: 1.6 }}>
+                ⚠️ คนนี้ตั้งหักประกัน {resignEmp.insurance_level} บ./เดือน แต่กระปุกมียอด 0 — อาจยังไม่ได้ใส่ยอดที่หักสะสมมา ตรวจสอบก่อนยืนยัน
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={closeResign} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: '0.5px solid #ccc', background: 'none', cursor: 'pointer', fontSize: 14 }}>ยกเลิก</button>
+              <button onClick={confirmResign} disabled={resignSaving || insBalance === null} style={{ height: 36, padding: '0 20px', borderRadius: 8, border: 'none', background: '#A32D2D', color: '#fff', cursor: 'pointer', fontWeight: 500, fontSize: 14, opacity: (resignSaving || insBalance === null) ? 0.6 : 1 }}>
+                {resignSaving ? 'กำลังบันทึก...' : 'ยืนยันลาออก'}
               </button>
             </div>
           </div>
