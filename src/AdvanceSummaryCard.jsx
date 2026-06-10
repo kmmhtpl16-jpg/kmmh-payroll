@@ -136,8 +136,8 @@ export default function AdvanceSummaryCard() {
     load();
   }, [load]);
 
-  // แสดงเฉพาะคนที่มีความเคลื่อนไหวในรอบ (ลงงานแล้ว หรือเคยเบิก)
-  const shown = rows.filter((r) => r.workDays > 0 || r.taken > 0);
+  // แสดงพนักงานที่ทำงานอยู่ทุกคน (แม้ยังเบิกได้ 0 เพื่อให้เห็นชื่อครบ)
+  const shown = rows;
   const totalRemaining = shown.reduce((s, r) => s + r.remaining, 0);
 
   return (
@@ -163,7 +163,7 @@ export default function AdvanceSummaryCard() {
           {err && <div style={st.err}>❌ โหลดข้อมูลไม่ได้: {err}</div>}
           {loading && !err && <p style={st.muted}>⏳ กำลังโหลด...</p>}
           {!loading && !err && shown.length === 0 && (
-            <p style={st.muted}>ยังไม่มีพนักงานลงงานหรือเบิกในรอบนี้</p>
+            <p style={st.muted}>ยังไม่มีพนักงานที่ทำงานอยู่</p>
           )}
 
           {!loading && !err && shown.length > 0 && (
