@@ -6,6 +6,7 @@ import EmployeesPage from "./EmployeesPage";
 import DeductionsPage from "./DeductionsPage";
 import ExtraIncomePage from "./ExtraIncomePage";
 import LeavePage from "./LeavePage";
+import InsurancePage from "./InsurancePage";
 import PayrollPage from "./PayrollPage";
 import WeeklyPage from "./WeeklyPage";
 import SettingsPage from "./SettingsPage";
@@ -16,6 +17,7 @@ const TABS = [
   { id: "deductions",  label: "📋 รายจ่ายพนักงาน" },
   { id: "extra",       label: "➕ รายได้พิเศษ" },
   { id: "leave",       label: "🏥 การลา" },
+  { id: "insurance",   label: "🐷 ประกันงาน" },
   { id: "payroll",     label: "💰 เงินเดือน" },
   { id: "weekly",      label: "💸 รายจ่ายบริษัท" },
   { id: "settings",    label: "⚙️ วันหยุด" },
@@ -24,9 +26,7 @@ const TABS = [
 export default function App() {
   const [role, setRole] = useState(null);
   const [activeTab, setActiveTab] = useState("attendance");
-
   if (!role) return <LoginPage onLogin={(r) => setRole(r)} />;
-
   return (
     <div style={styles.app}>
       <header style={styles.header}>
@@ -50,6 +50,7 @@ export default function App() {
         {activeTab === "deductions"  && <DeductionsPage role={role} />}
         {activeTab === "extra"       && <ExtraIncomePage role={role} />}
         {activeTab === "leave"       && <LeavePage role={role} />}
+        {activeTab === "insurance"   && <InsurancePage role={role} />}
         {activeTab === "payroll"     && <PayrollPage role={role} />}
         {activeTab === "weekly"      && <WeeklyPage role={role} />}
         {activeTab === "settings"    && <SettingsPage role={role} />}
