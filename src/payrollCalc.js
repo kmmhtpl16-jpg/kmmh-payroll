@@ -1,37 +1,55 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v6
+// คำนวณเงินเดือน KMMH — v7.3
 // Logic ตาม KMMH_payroll_logic_v2.md
 //
+// 🔧 v7.3 เปลี่ยนจาก v7.2:
+//   • [#5] employee query รวม "คนลาออกเดือนนี้" แม้ถูกปิด is_active แล้ว
+//     → กันลืมคืนประกัน/ค่าสมัคร ถ้า HR กดปิดสถานะทันทีตอนลาออก
+//   • [#8] isSunday parse วันที่แบบ local ให้ตรงกับ countSundays
+//     (กัน UTC shift เพี้ยนวันถ้ารันใน timezone ติดลบ)
+//
+// 🔧 v7.2 เปลี่ยนจาก v7.1:
+//   • [กอง1-1] เพิ่ม syncInsuranceRefund — ตอนลาออก ลง ledger เป็น entry 'refund'
+//     (−ยอดคืน) ผูก period_id กันซ้ำ → กระปุกเหลือ 0 ตรง spec ข้อ 2.7
+//   • [กอง1-2] exclMap ตัดเฉพาะรายการอัตโนมัติของงวดนี้ (deposit/refund)
+//     ไม่ตัด withdraw → ถ้าเดือนลาออกมีเบิกประกัน จะคืนเงินถูก (ไม่คืนเกิน)
+//   • [กอง1-3] savePayroll บันทึก insurance_refund / app_fee_refund / app_fee_deduct
+//     ลง payroll_records ด้วย (เดิมเก็บแค่ยอดรวม → สลิปย้อนหลังไม่เห็นบรรทัดคืน)
+//   • [กันเหนียวปี] รับ year ได้ทั้ง พ.ศ./ค.ศ. → แปลงเป็น ค.ศ. ก่อนนับวันอาทิตย์
+//     และก่อน query วันที่ (work_date จากเครื่องสแกนเป็น ค.ศ.) กันค่าแรงอาทิตย์เพี้ยน
+//
+// 🔧 v7.1 เปลี่ยนจาก v7:
+//   • แก้ insurance_refund ให้ตรง "ตัวเลือก A" (เดือนลาออกหักประกันต่อ → คืนทั้งก้อน)
+//     เดิม v7: refund = ยอด ledger ทั้งหมด ณ ตอน calc
+//        ปัญหา (1) ตอนกดคำนวณ deposit งวดนี้ยังไม่ถูกสร้าง → refund ขาดไป 1 เดือน
+//                 (เคสโด้ คืนแค่ 400 แทนที่จะเป็น 600)
+//             (2) ถ้า re-save แล้วคำนวณใหม่ deposit งวดนี้ถูกนับเข้า → refund เพี้ยน (นับซ้ำ)
+//     แก้ v7.1: refund = ยอดกระปุก "ไม่รวมงวดนี้" + job_insurance ของเดือนนี้
+//        → ได้ 600 ทันทีตั้งแต่ครั้งแรก และ re-save กี่ครั้งก็ได้ 600 เท่าเดิม (idempotent)
+//
+// 🔧 v7 เปลี่ยนจาก v6:
+//   • แก้บั๊ก insurance_level map ผิด key — เดิม level_200/level_500
+//     แต่ค่าจริงใน DB คือ '200'/'500' → ทุกคนหัก 0 มาตลอด
+//     แก้เป็น { none:0, "200":200, "500":500 } → หักประกันถูกต้องแล้ว
+//   • เพิ่ม syncInsuranceDeposit — ตอนกด "บันทึกลง DB" จะสร้าง
+//     deposit ลง insurance_ledger ให้อัตโนมัติ (กระปุกโตเอง)
+//     - กันซ้ำด้วย period_id: 1 คน 1 เดือน มี deposit ได้แค่ entry เดียว
+//     - เฉพาะ permanent + insurance_level ≠ none เท่านั้น
+//     - ถ้ามี deposit ของงวดนี้แล้ว → ข้าม (ไม่สร้างซ้ำ)
+//
 // 🔧 v6 เปลี่ยนจาก v5:
-//   • รายได้ "อื่นๆ" (โบนัส/ค่าพาหนะ ที่บันทึกในหน้ารายได้พิเศษ)
-//     จะถูกบวกเข้า total_income → net_pay ด้วย
-//     - ดึงเฉพาะ income_type='other' (ไม่ดึง OT ซ้ำ เพราะ OT คิดจากสแกนแล้ว)
-//     - รวมทุกรายการ "อื่นๆ" ของคนนั้นในงวด (ทั้งติดป้ายเสาร์/สิ้นเดือน)
-//   • หน้าเงินเดือน = จ่ายจริง เท่ากันเป๊ะ (รักษากฎเดิม)
-//   ⚠️ เพิ่มโบนัสแล้วต้องกด "คำนวณเงินเดือน" ใหม่ ตัวเลขจึงจะอัปเดต
+//   • รายได้ "อื่นๆ" (โบนัส/ค่าพาหนะ) บวกเข้า total_income → net_pay
+//   • ดึงเฉพาะ income_type='other' (ไม่ดึง OT ซ้ำ)
 //
 // 🔧 v5 เปลี่ยนจาก v4:
-//   • OT: ตอนกด "บันทึกลง DB" จะสร้าง/อัปเดตรายการ OT ลง
-//     extra_income_entries ให้อัตโนมัติ (ตัวจริงของรอบจ่าย OT)
-//     - OT > 0 และยังไม่มีรายการ → สร้างใหม่ (ตั้งต้นจ่ายสิ้นเดือน)
-//     - OT > 0 และมีรายการแล้ว แต่ HR ยังไม่แก้มือ → อัปเดตเฉพาะ "ยอด"
-//       (ไม่แตะรอบจ่ายที่ HR เลือกไว้)
-//     - HR แก้มือแล้ว (is_overridden) → ไม่แตะอะไรเลย
-//     - OT = 0 และมีรายการ auto ค้างอยู่ → ลบทิ้ง (กันบรรทัดขยะ)
-//   • net_pay หน้าเงินเดือนยัง "รวม OT" เหมือนเดิม (ทาง A) —
-//     extra_income แค่บอกว่า OT ก้อนนี้ออกรอบไหน ไม่บวกซ้ำ
-//     (สิ้นเดือน = net_pay − เสาร์ที่จ่ายแล้ว → นับ OT ครั้งเดียว)
+//   • OT: ตอนกด "บันทึกลง DB" สร้าง/อัปเดตรายการ OT ลง extra_income_entries
 //
 // 🔧 v4 (เดิม):
-//   • ค่าแรงวันอาทิตย์ (holiday_wage) — นับอาทิตย์ทั้งเดือนจาก "ปฏิทิน"
-//     ไม่ใช่จาก attendance_logs (เพราะอาทิตย์ร้านหยุด ไม่มีบันทึกเวลา)
-//   • holiday_wage เฉพาะพนักงาน "ประจำ" เท่านั้น — ทดลองงานไม่ได้
-//   • เข้าประจำกลางเดือน → นับเฉพาะอาทิตย์ตั้งแต่วันเข้าประจำเป็นต้นไป
+//   • holiday_wage — นับอาทิตย์ทั้งเดือนจากปฏิทิน เฉพาะประจำ
 //
 // 🔧 v3 (เดิม):
-//   • หน้าเงินเดือน = ยอดรวมทั้งเดือน (ไม่แยกเสาร์/สิ้นเดือน)
-//   • สิ้นเดือน = net_pay − เงินจ่ายเสาร์ทุกรอบ (ส่วนเหลือ)
+//   • หน้าเงินเดือน = ยอดรวมทั้งเดือน, สิ้นเดือน = net_pay − เสาร์ทุกรอบ
 // ─────────────────────────────────────────────────────────────
 
 import { supabase } from "./supabaseClient";
@@ -48,12 +66,12 @@ function daysInMonth(year, month) {
 }
 
 function isSunday(dateStr) {
-  return new Date(dateStr).getDay() === 0;
+  // 🔧 v7.3 [#8] parse แบบ local ให้ตรงกับ countSundays (กัน UTC shift ใน timezone ติดลบ)
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d).getDay() === 0;
 }
 
 // นับวันอาทิตย์ในเดือนจากปฏิทิน (ตั้งแต่ fromDay ถึงสิ้นเดือน)
-//   fromDay = 1 → ทั้งเดือน
-//   fromDay > 1 → กรณีเข้าประจำกลางเดือน เริ่มนับจากวันนั้น
 function countSundays(year, month, fromDay = 1) {
   const days = daysInMonth(year, month);
   let count = 0;
@@ -64,9 +82,6 @@ function countSundays(year, month, fromDay = 1) {
 }
 
 // หักสายรายวัน (logic v2)
-// 1-40 น. → นาที × rate
-// 41-60 น. → hourly_rate × 1
-// 61+ น.  → hourly_rate × floor(นาที/60) + ส่วนปลีก × rate
 function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
   if (!lateMin || lateMin <= 0) return 0;
   const rate = ratePerMin || 1;
@@ -92,23 +107,47 @@ function calcSocialSecurity(empType, base) {
   return Math.min(parseFloat((base * 0.05).toFixed(2)), 875);
 }
 
+// 🔧 v7 — map insurance_level ให้ตรง enum จริงใน DB ('none'/'200'/'500')
+function insuranceAmount(level) {
+  const map = { none: 0, "200": 200, "500": 500 };
+  return map[level] || 0;
+}
+
 // ════════════════════════════════════════════════════════════
 // calcPayroll — entry point หลัก
-// รับ year (ค.ศ.), month (1-12)
-// คืน { results[], summary }
 // ════════════════════════════════════════════════════════════
 export async function calcPayroll(year, month) {
-  const days = daysInMonth(year, month);
-  const dateFrom = `${year}-${String(month).padStart(2,"0")}-01`;
-  const dateTo   = `${year}-${String(month).padStart(2,"0")}-${String(days).padStart(2,"0")}`;
+  // 🔧 กันเหนียวปี — รับได้ทั้ง พ.ศ.(>2400) และ ค.ศ. แล้ว normalize เป็น ค.ศ.
+  //   ใช้ ce กับ "วันที่จริง" ทุกที่ (นับวันอาทิตย์ + query work_date ที่เป็น ค.ศ.)
+  //   ส่วนการค้นงวด (pay_periods.year) ยังใช้ year ตามที่เก็บใน DB
+  const ce = year > 2400 ? year - 543 : year;
+  const days = daysInMonth(ce, month);
+  const dateFrom = `${ce}-${String(month).padStart(2,"0")}-01`;
+  const dateTo   = `${ce}-${String(month).padStart(2,"0")}-${String(days).padStart(2,"0")}`;
 
-  // ── ดึงพนักงาน active ──
-  const { data: employees, error: empErr } = await supabase
+  // ── ดึงพนักงาน active + คนที่ลาออกเดือนนี้ (แม้ถูกปิด is_active แล้ว) ──
+  // 🔧 v7.3 [#5] กันลืมคืนประกัน/ค่าสมัคร: ถ้า HR ปิดสถานะทันทีตอนลาออก
+  //   คนนั้นจะหลุดจาก query เดิม (is_active=true) → ไม่ได้คืนเงิน
+  //   จึงดึงคนลาออกเดือนนี้มา merge เพิ่ม (กันซ้ำด้วย id)
+  const { data: activeEmps, error: empErr } = await supabase
     .from("employees")
     .select("*")
     .eq("is_active", true)
     .order("emp_code");
   if (empErr) throw new Error("โหลดพนักงานไม่ได้: " + empErr.message);
+
+  const { data: resignedEmps, error: resErr } = await supabase
+    .from("employees")
+    .select("*")
+    .gte("resigned_date", dateFrom)
+    .lte("resigned_date", dateTo);
+  if (resErr) throw new Error("โหลดพนักงานลาออกไม่ได้: " + resErr.message);
+
+  const empMap = new Map();
+  (activeEmps   || []).forEach(e => empMap.set(e.id, e));
+  (resignedEmps || []).forEach(e => empMap.set(e.id, e));  // ทับ/เพิ่ม คนลาออก
+  const employees = [...empMap.values()]
+    .sort((a, b) => String(a.emp_code).localeCompare(String(b.emp_code)));
 
   // ── ดึง attendance_logs ทั้งเดือน ──
   const empIds = employees.map(e => e.id);
@@ -151,7 +190,6 @@ export async function calcPayroll(year, month) {
     .lte("request_date", dateTo);
 
   // ── ดึงรายได้ "อื่นๆ" จาก extra_income (โบนัส/ค่าพาหนะ ฯลฯ) ──
-  //   เฉพาะ income_type='other' — ไม่ดึง OT (OT คิดจากสแกนใน total_income แล้ว)
   const otherIncomeMap = {};
   const { data: period0 } = await supabase
     .from("pay_periods").select("id").eq("year", year).eq("month", month).maybeSingle();
@@ -165,6 +203,24 @@ export async function calcPayroll(year, month) {
       otherIncomeMap[e.employee_id] = (otherIncomeMap[e.employee_id] || 0) + Number(e.amount || 0);
     });
   }
+
+  // 🔧 v7.1 — ยอดกระปุกประกัน "ไม่รวมงวดนี้" (สำหรับ insurance_refund ตอนลาออก)
+  //   ตัดรายการของงวดนี้ออก (period_id = งวดนี้) เพื่อกันนับ deposit เดือนนี้ซ้ำตอน re-save
+  //   แล้วค่อยบวก job_insurance ของเดือนนี้กลับเข้าไปตอนคำนวณ refund (ดูด้านล่าง)
+  const curPeriodId = period0?.id || null;
+  const insBalanceExclMap = {};
+  const { data: insLedger } = await supabase
+    .from("insurance_ledger")
+    .select("employee_id, amount, period_id, entry_type")
+    .in("employee_id", empIds);
+  (insLedger || []).forEach(r => {
+    // 🔧 v7.2 [กอง1-2] ตัดเฉพาะรายการ "อัตโนมัติ" ของงวดนี้ (deposit/refund) เพื่อกันนับซ้ำตอน re-save
+    //   แต่ยังนับ withdraw (เบิก) ของงวดนี้ → ถ้าเดือนลาออกมีเบิกประกัน จะคืนเงินถูก
+    if (curPeriodId && r.period_id === curPeriodId &&
+        (r.entry_type === "deposit" || r.entry_type === "refund")) return;
+    insBalanceExclMap[r.employee_id] =
+      (insBalanceExclMap[r.employee_id] || 0) + Number(r.amount || 0);
+  });
 
   // ── คำนวณรายคน ──
   const results = [];
@@ -196,11 +252,8 @@ export async function calcPayroll(year, month) {
     for (const log of empLogs) {
       if (log.needs_hr_review) has_review = true;
 
-      // อาทิตย์ไม่มี log จริง (ร้านหยุด) — แต่กันเผื่อมีหลุดมา ก็ข้าม ไม่นับซ้ำ
-      // ค่าแรงอาทิตย์คิดจากปฏิทินด้านล่างแทน
       if (isSunday(log.work_date)) continue;
 
-      // เลือก daily rate ของวันนี้
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
@@ -210,19 +263,15 @@ export async function calcPayroll(year, month) {
       if (usePerm) perm_base  += dayRate;
       else         trial_base += dayRate;
 
-      // late — late_minutes วันเสาร์ (เฉพาะสายเช้า) คิดมาจาก attendanceLogic.js แล้ว
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
       const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
       late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
-      // OT
       ot_hours += parseFloat(log.ot_hours || 0);
 
-      // hr_extra_deduct (ออกระหว่างวัน)
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // ลา — ถ้า hr_note มีคำว่าลา/ขาด → ตัดเบี้ยขยัน
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
 
@@ -231,15 +280,13 @@ export async function calcPayroll(year, month) {
     const hourly_rate = parseFloat((daily_rate / 8).toFixed(2));
 
     // ── ค่าแรงวันอาทิตย์ (v4) ──
-    //   นับอาทิตย์จากปฏิทิน เฉพาะประจำเท่านั้น
-    //   เข้าประจำกลางเดือน → นับเฉพาะอาทิตย์ตั้งแต่วันเข้าประจำ
     let holiday_days = 0;
     let holiday_wage = 0;
     if (isPerm) {
       const fromDay = permStartInMonth
-        ? parseInt(permStart.slice(8, 10), 10) // วันที่ของ permanent_start_date
+        ? parseInt(permStart.slice(8, 10), 10)
         : 1;
-      holiday_days = countSundays(year, month, fromDay);
+      holiday_days = countSundays(ce, month, fromDay);
       holiday_wage = parseFloat((dailyPerm * holiday_days).toFixed(2));
     }
 
@@ -256,25 +303,31 @@ export async function calcPayroll(year, month) {
     const app_fee_deduct = (isFirstMonth && emp.app_fee_status === "none") ? 100 : 0;
     const app_fee_refund = (isResigningThisMonth && emp.app_fee_status === "held") ? 100 : 0;
 
-    // insurance_refund (ยังไม่ implement get_insurance_balance — ใส่ 0 ก่อน)
-    const insurance_refund = 0;
-
-    // ปกส. — ใช้ monthly_salary เป็นฐาน (ตรง Excel จริง ไม่เปลี่ยนแม้ลาบางวัน)
+    // ปกส. — ใช้ monthly_salary เป็นฐาน
     const ss_base         = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
-    // ประกันงาน
-    const insuranceLevelMap = { none: 0, level_200: 200, level_500: 500 };
-    const job_insurance = isPerm ? (insuranceLevelMap[emp.insurance_level] || 0) : 0;
+    // 🔧 v7 — ประกันงาน (แก้ map ให้ตรง enum)
+    const job_insurance = isPerm ? insuranceAmount(emp.insurance_level) : 0;
 
-    // รายจ่าย — แยก "เบิกเงินสด" ออกจาก other_deduct ไปรวมใน advance_total
+    // 🔧 v7.1 — insurance_refund (ตัวเลือก A): ลาออกเดือนนี้ → คืนกระปุก "รวมหักเดือนนี้"
+    //   = ยอดสะสมก่อนงวดนี้ (insBalanceExclMap) + ประกันที่หักเดือนนี้ (job_insurance)
+    //   • เดือนลาออกยังหักประกันตามปกติ (job_insurance อยู่ใน total_deduct)
+    //     แล้วคืนกลับทั้งก้อนผ่าน insurance_refund → สุทธิ = ได้กระปุกเดิมคืน
+    //   • คิดจาก exclMap จึง idempotent: re-save กี่ครั้งก็ได้ยอดเดิม
+    //   เคสโด้ มิ.ย.: 400 (ธ.ค.–พ.ค. − สงกรานต์) + 200 (มิ.ย.) = 600
+    const insurance_refund = isResigningThisMonth
+      ? parseFloat(((insBalanceExclMap[emp.id] || 0) + job_insurance).toFixed(2))
+      : 0;
+
+    // รายจ่าย
     const other_deduct   = empDeductions
       .filter(d => d.deduction_type_id !== ADVANCE_DEDUCTION_TYPE_ID)
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
     const deduct_advance = empDeductions
       .filter(d => d.deduction_type_id === ADVANCE_DEDUCTION_TYPE_ID)
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
-    const loan_deduct    = 0; // ยังไม่มี loan table
+    const loan_deduct    = 0;
     const advance_total  = parseFloat(
       (empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0) + deduct_advance).toFixed(2)
     );
@@ -300,6 +353,8 @@ export async function calcPayroll(year, month) {
       full_name:         emp.full_name,
       emp_type:          emp.emp_type,
       monthly_salary:    emp.monthly_salary || null,
+      insurance_level:   emp.insurance_level,   // 🔧 v7 — ส่งต่อให้ savePayroll ใช้ sync deposit
+      resigned_date:     resignDate || null,     // 🔧 v7.2 — ใช้เป็น entry_date ของ refund ประกัน
       daily_rate,
       hourly_rate,
       work_days,
@@ -347,8 +402,9 @@ export async function calcPayroll(year, month) {
 
 // ════════════════════════════════════════════════════════════
 // savePayrollResults — บันทึกลง payroll_records
-//   + sync รายการ OT เข้า extra_income_entries (v5)
-// คืน { ot: { created, updated, removed } }
+//   + sync OT เข้า extra_income_entries (v5)
+//   + sync deposit ประกันงานเข้า insurance_ledger (v7)
+// คืน { ot: {...}, insurance: {...} }
 // ════════════════════════════════════════════════════════════
 export async function savePayrollResults(year, month, results) {
   const { data: period, error: pErr } = await supabase
@@ -375,6 +431,9 @@ export async function savePayrollResults(year, month, results) {
     leave_deduct:       r.leave_deduct,
     social_security:    r.social_security,
     job_insurance:      r.job_insurance,
+    app_fee_deduct:     r.app_fee_deduct,    // 🔧 v7.2 [กอง1-3]
+    app_fee_refund:     r.app_fee_refund,    // 🔧 v7.2 [กอง1-3]
+    insurance_refund:   r.insurance_refund,  // 🔧 v7.2 [กอง1-3]
     advance_total:      r.advance_total,
     loan_deduct:        r.loan_deduct,
     other_deduct:       r.other_deduct,
@@ -393,17 +452,110 @@ export async function savePayrollResults(year, month, results) {
   // ── sync OT → extra_income_entries ──
   const ot = await syncOtExtraIncome(period.id, results);
 
-  return { ot };
+  // 🔧 v7 — sync deposit ประกันงาน → insurance_ledger (entry_date เป็น ค.ศ.)
+  const ce = year > 2400 ? year - 543 : year;
+  const insuranceDeposit = await syncInsuranceDeposit(period.id, ce, month, results);
+
+  // 🔧 v7.2 [กอง1-1] — sync refund ประกันงาน (คนลาออก) → ledger ให้กระปุกเหลือ 0
+  const insuranceRefund = await syncInsuranceRefund(period.id, ce, month, results);
+
+  return {
+    ot,
+    insurance: insuranceDeposit,
+    insuranceRefund,
+  };
+}
+
+// ════════════════════════════════════════════════════════════
+// syncInsuranceDeposit (v7) — สร้าง deposit ประกันงานลง insurance_ledger
+//   • เฉพาะ permanent + job_insurance > 0
+//   • กันซ้ำด้วย period_id: ถ้ามี deposit ของงวดนี้แล้ว → ข้าม
+//   • entry_date = วันที่ 1 ของเดือนงวดนั้น
+// ════════════════════════════════════════════════════════════
+async function syncInsuranceDeposit(periodId, year, month, results) {
+  // โหลด deposit ที่มีอยู่แล้วในงวดนี้ (กันซ้ำ)
+  const { data: existing, error: exErr } = await supabase
+    .from("insurance_ledger")
+    .select("employee_id")
+    .eq("period_id", periodId)
+    .eq("entry_type", "deposit");
+  if (exErr) throw new Error("โหลด deposit ประกันงานไม่ได้: " + exErr.message);
+
+  const alreadyHas = new Set((existing || []).map(e => e.employee_id));
+
+  const entryDate = `${year}-${String(month).padStart(2,"0")}-01`;
+  const toInsert = [];
+
+  for (const r of results) {
+    const amt = Number(r.job_insurance || 0);
+    if (amt <= 0) continue;                  // ไม่หักประกัน → ข้าม
+    if (alreadyHas.has(r.employee_id)) continue;  // มี deposit งวดนี้แล้ว → ข้าม
+
+    toInsert.push({
+      employee_id: r.employee_id,
+      entry_date:  entryDate,
+      entry_type:  "deposit",
+      amount:      amt,
+      period_id:   periodId,
+      note:        `หักประกันงาน (อัตโนมัติจากเงินเดือน)`,
+    });
+  }
+
+  if (toInsert.length) {
+    const { error } = await supabase.from("insurance_ledger").insert(toInsert);
+    if (error) throw new Error("สร้าง deposit ประกันงานไม่สำเร็จ: " + error.message);
+  }
+
+  return { created: toInsert.length, skipped: results.length - toInsert.length };
+}
+
+// ════════════════════════════════════════════════════════════
+// syncInsuranceRefund (v7.2) — ตอนลาออก ลง ledger เป็น 'refund' (−ยอดคืน)
+//   • เฉพาะคนที่มี insurance_refund > 0 (= ลาออกเดือนนี้ + มีกระปุก)
+//   • กันซ้ำด้วย period_id + entry_type='refund': มีแล้ว → ข้าม
+//   • amount เป็นค่าลบ (จ่ายออกจากกระปุก) → SUM(amount) ของคนนั้นเหลือ 0
+//   • entry_date = วันลาออกจริง (fallback = วันที่ 1 ของเดือน, ค.ศ.)
+// ════════════════════════════════════════════════════════════
+async function syncInsuranceRefund(periodId, ceYear, month, results) {
+  const { data: existing, error: exErr } = await supabase
+    .from("insurance_ledger")
+    .select("employee_id")
+    .eq("period_id", periodId)
+    .eq("entry_type", "refund");
+  if (exErr) throw new Error("โหลด refund ประกันงานไม่ได้: " + exErr.message);
+
+  const alreadyHas = new Set((existing || []).map(e => e.employee_id));
+  const fallbackDate = `${ceYear}-${String(month).padStart(2,"0")}-01`;
+  const toInsert = [];
+
+  for (const r of results) {
+    const amt = Number(r.insurance_refund || 0);
+    if (amt <= 0) continue;                       // ไม่มียอดคืน → ข้าม
+    if (alreadyHas.has(r.employee_id)) continue;  // มี refund งวดนี้แล้ว → ข้าม
+
+    toInsert.push({
+      employee_id: r.employee_id,
+      entry_date:  r.resigned_date || fallbackDate,
+      entry_type:  "refund",
+      amount:      -amt,                          // ลบ = จ่ายออกจากกระปุก
+      method:      "cash",
+      period_id:   periodId,
+      note:        "คืนประกันงานตอนลาออก (อัตโนมัติจากเงินเดือน)",
+    });
+  }
+
+  if (toInsert.length) {
+    const { error } = await supabase.from("insurance_ledger").insert(toInsert);
+    if (error) throw new Error("สร้าง refund ประกันงานไม่สำเร็จ: " + error.message);
+  }
+
+  return { created: toInsert.length };
 }
 
 // ════════════════════════════════════════════════════════════
 // syncOtExtraIncome — สร้าง/อัปเดต/ลบ รายการ OT ใน extra_income_entries
-//   ให้ตรงกับยอด OT ที่เพิ่งคำนวณ โดย:
-//   • ไม่แตะรอบจ่าย (disburse_on / cycle_id) ที่ HR เลือกไว้
-//   • ไม่แตะยอดที่ HR แก้มือแล้ว (is_overridden = true)
 // ════════════════════════════════════════════════════════════
 async function syncOtExtraIncome(periodId, results) {
-  // โหลดรายการ OT ที่มีอยู่แล้วในงวดนี้
   const { data: existing, error: exErr } = await supabase
     .from("extra_income_entries")
     .select("id, employee_id, is_overridden")
@@ -411,13 +563,11 @@ async function syncOtExtraIncome(periodId, results) {
     .eq("income_type", "ot");
   if (exErr) throw new Error("โหลดรายการ OT (รายได้พิเศษ) ไม่ได้: " + exErr.message);
 
-  // map: employee_id → row (ปกติคนละ 1 รายการ เอาตัวแรกพอ)
   const existMap = {};
   (existing || []).forEach(e => {
     if (!existMap[e.employee_id]) existMap[e.employee_id] = e;
   });
 
-  // ผู้บันทึกปัจจุบัน (สำหรับ row ที่สร้างใหม่)
   let createdBy = null;
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -425,8 +575,8 @@ async function syncOtExtraIncome(periodId, results) {
   } catch (_) { /* ไม่มี user ก็ปล่อย null */ }
 
   const toInsert = [];
-  const toUpdate = []; // { id, amount, note }
-  const toDelete = []; // [id, ...]
+  const toUpdate = [];
+  const toDelete = [];
 
   for (const r of results) {
     const otAmount = Number(r.ot_amount || 0);
@@ -435,7 +585,6 @@ async function syncOtExtraIncome(periodId, results) {
 
     if (otAmount > 0) {
       if (!cur) {
-        // ยังไม่มี → สร้างใหม่ ตั้งต้นจ่ายสิ้นเดือน
         toInsert.push({
           employee_id:     r.employee_id,
           period_id:       periodId,
@@ -451,14 +600,10 @@ async function syncOtExtraIncome(periodId, results) {
           updated_at:      new Date().toISOString(),
         });
       } else if (!cur.is_overridden) {
-        // มีแล้ว + HR ยังไม่แก้มือ → อัปเดตเฉพาะยอด (ไม่แตะรอบจ่าย)
         toUpdate.push({ id: cur.id, amount: otAmount, note });
       }
-      // มีแล้ว + HR แก้มือ → ไม่แตะอะไรเลย
     } else {
-      // OT = 0 → ถ้ามี row auto ค้างอยู่ (ไม่ได้แก้มือ) → ลบทิ้ง
       if (cur && !cur.is_overridden) toDelete.push(cur.id);
-      // ไม่มี row / HR แก้มือ → ปล่อยไว้
     }
   }
 
