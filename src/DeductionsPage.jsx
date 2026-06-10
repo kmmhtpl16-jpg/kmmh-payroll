@@ -231,6 +231,7 @@ export default function DeductionsPage({ role }) {
             <input type="date" value={form.deduct_date}
               onChange={e => setForm(f => ({ ...f, deduct_date: e.target.value }))}
               style={s.input} />
+            {form.deduct_date && <div style={s.beHint}>= {toBE(form.deduct_date)} (พ.ศ.)</div>}
           </div>
 
           {/* หมายเหตุ */}
@@ -359,6 +360,7 @@ export default function DeductionsPage({ role }) {
                 <input type="date" value={editVals.deduct_date}
                   onChange={e => setEditVals(v => ({ ...v, deduct_date: e.target.value }))}
                   style={{ ...s.input, width:"100%" }} />
+                {editVals.deduct_date && <div style={s.beHint}>= {toBE(editVals.deduct_date)} (พ.ศ.)</div>}
               </div>
               <div style={{ marginBottom:12 }}>
                 <label style={s.label}>หักเมื่อไหร่</label>
@@ -442,4 +444,5 @@ const s = {
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
                  padding:"14px 16px", background:"#1e3a5f", borderRadius:"16px 16px 0 0" },
   closeBtn:  { background:"none", border:"none", color:"#fff", fontSize:20, cursor:"pointer" },
+  beHint:    { fontSize:11, color:"#94a3b8", marginTop:4 },
 };

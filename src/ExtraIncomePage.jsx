@@ -19,6 +19,13 @@ import { supabase } from "./supabaseClient";
 
 const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// แปลงสตริงวันที่ "YYYY-MM-DD" (ค.ศ.) → "DD/MM/พ.ศ." (แสดงผลเท่านั้น — เก็บยังเป็น ค.ศ.)
+const toBE = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${Number(y) + 543}`;
+};
+
 // ── โทนเขียว ──
 const GREEN = "#16a34a";
 const GREEN_DARK = "#15803d";
@@ -323,7 +330,7 @@ export default function ExtraIncomePage({ role }) {
           </div>
           {form.disburse_on === "saturday" && (
             <p style={S.hintCenter}>
-              {nextCycle ? `→ จะจ่ายรอบเสาร์ ${nextCycle.cycle_date}` : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
+              {nextCycle ? `→ จะจ่ายรอบเสาร์ ${toBE(nextCycle.cycle_date)}` : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
             </p>
           )}
 
@@ -353,6 +360,7 @@ export default function ExtraIncomePage({ role }) {
               <label style={S.lbl}>วันที่ทำรายการ</label>
               <input style={S.input} type="date" value={form.entry_date}
                 onChange={(e) => setForm((f) => ({ ...f, entry_date: e.target.value }))} />
+              {form.entry_date && <div style={S.beHint}>= {toBE(form.entry_date)} (พ.ศ.)</div>}
             </div>
           </div>
 
@@ -441,6 +449,7 @@ const S = {
   lbl: { display: "block", fontSize: "0.8rem", color: "#6b7280", marginBottom: 4 },
   select: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
   input: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
+  beHint: { fontSize: "0.72rem", color: "#9ca3af", marginTop: 4 },
   cycleRow: { display: "flex", gap: 12, marginTop: 6 },
   cycleCard: { flex: 1, border: "2px solid #e5e7eb", borderRadius: 10, padding: "0.8rem", cursor: "pointer", textAlign: "center", transition: "all 0.15s" },
   cycleDesc: { fontSize: "0.75rem", color: "#9ca3af", marginTop: 4 },
