@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
+import AdvanceSummaryCard from "./AdvanceSummaryCard";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
@@ -456,6 +457,9 @@ export default function WeeklyPage({ role }) {
         <h2 style={s.title}>💸 รายจ่ายบริษัท</h2>
         <button onClick={loadAll} style={s.refreshBtn}>🔄 โหลดใหม่</button>
       </div>
+
+      {/* การ์ดสรุป "เบิกได้อีกเท่าไหร่" — อ่านอย่างเดียว, โหลดข้อมูลเอง ไม่ผูกกับการคำนวณเงินเดือน */}
+      <AdvanceSummaryCard />
 
       {msg && (
         <div style={{ ...s.msgBox,
