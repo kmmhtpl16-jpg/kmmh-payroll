@@ -1,7 +1,17 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.3
+// คำนวณเงินเดือน KMMH — v7.4
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.4 เปลี่ยนจาก v7.3:
+//   • [#7] เบิกอ่านที่เดียว — advance_total คิดจาก deductions (ชนิดเบิก) ที่เดียว
+//     เดิม v7.3: advance_total = Σ(advance_requests ในเดือน) + เบิกใน deductions
+//        ปัญหา: เบิกในแอปจริงถูกคีย์ที่ DeductionsPage → ตาราง deductions เท่านั้น
+//               ส่วน advance_requests ไม่มีฟอร์มไหนเขียนลงเลย → อ่าน 2 ที่ = เสี่ยงนับซ้ำเปล่าๆ
+//        แก้ v7.4: ลบ query advance_requests + ตัวแปร empAdvances ทิ้ง
+//               advance_total = เบิกใน deductions (deduct_advance) อย่างเดียว
+//               → ตรงกับ AdvanceSummaryCard + WeeklyPage (เบิกมาจากแหล่งเดียวทั้งระบบ)
+//        หมายเหตุ: ADVANCE_DEDUCTION_TYPE_ID ยังคงไว้ (ใช้แยกเบิกออกจาก other_deduct)
 //
 // 🔧 v7.3 เปลี่ยนจาก v7.2:
 //   • [#5] employee query รวม "คนลาออกเดือนนี้" แม้ถูกปิด is_active แล้ว
@@ -55,6 +65,7 @@
 import { supabase } from "./supabaseClient";
 
 // deduction_type_id ของ "เบิกเงินสด" — แยกออกจาก other_deduct ไปอยู่ใน advance_total
+// 🔧 v7.4 [#7] เบิกอ่านจาก deductions ชนิดนี้ "ที่เดียว" (เลิกอ่าน advance_requests)
 const ADVANCE_DEDUCTION_TYPE_ID = "eb37bbd8-3636-4c37-a4dc-59b04a03ac61";
 
 // ════════════════════════════════════════════════════════════
@@ -181,13 +192,7 @@ export async function calcPayroll(year, month) {
     .gte("deduct_date", dateFrom)
     .lte("deduct_date", dateTo);
 
-  // ── ดึง advance_requests — กรองเฉพาะเดือนนี้ด้วย request_date ──
-  const { data: advances } = await supabase
-    .from("advance_requests")
-    .select("employee_id, amount")
-    .in("employee_id", empIds)
-    .gte("request_date", dateFrom)
-    .lte("request_date", dateTo);
+  // 🔧 v7.4 [#7] เลิกดึง advance_requests — เบิกอ่านจาก deductions ที่เดียว (ดู advance_total ด้านล่าง)
 
   // ── ดึงรายได้ "อื่นๆ" จาก extra_income (โบนัส/ค่าพาหนะ ฯลฯ) ──
   const otherIncomeMap = {};
@@ -228,7 +233,6 @@ export async function calcPayroll(year, month) {
   for (const emp of employees) {
     const empLogs        = (logs       || []).filter(l => l.employee_id === emp.id);
     const empDeductions  = (deductions || []).filter(d => d.employee_id === emp.id);
-    const empAdvances    = (advances   || []).filter(a => a.employee_id === emp.id);
 
     // rate ตั้งต้น
     const dailyTrial = parseFloat(emp.daily_rate) || 0;
@@ -328,9 +332,8 @@ export async function calcPayroll(year, month) {
       .filter(d => d.deduction_type_id === ADVANCE_DEDUCTION_TYPE_ID)
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
     const loan_deduct    = 0;
-    const advance_total  = parseFloat(
-      (empAdvances.reduce((s, a) => s + parseFloat(a.amount || 0), 0) + deduct_advance).toFixed(2)
-    );
+    // 🔧 v7.4 [#7] เบิกอ่านที่เดียว — มาจาก deductions ชนิดเบิก (deduct_advance) เท่านั้น
+    const advance_total  = parseFloat(deduct_advance.toFixed(2));
 
     const other_income = parseFloat((otherIncomeMap[emp.id] || 0).toFixed(2));
 
