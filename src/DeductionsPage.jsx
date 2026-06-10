@@ -4,6 +4,13 @@ import { supabase } from "./supabaseClient";
 
 const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// แปลงสตริงวันที่ "YYYY-MM-DD" (ค.ศ.) → "DD/MM/พ.ศ." (แสดงผลเท่านั้น — เก็บยังเป็น ค.ศ.)
+const toBE = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${Number(y) + 543}`;
+};
+
 const CYCLE_OPTIONS = [
   { value: "saturday",  label: "🗓 วันเสาร์",   desc: "หักรอบเสาร์ที่ตรงกับสัปดาห์นี้" },
   { value: "month_end", label: "📅 สิ้นเดือน",  desc: "หักตอนปิดงวดสิ้นเดือน" },
@@ -292,7 +299,7 @@ export default function DeductionsPage({ role }) {
                     {row.deduct_cycle === "saturday" ? "🗓 เสาร์" : "📅 สิ้นเดือน"}
                   </span>
                   {row.note && <span style={{ color:"#64748b", fontSize:12 }}>— {row.note}</span>}
-                  <span style={{ color:"#94a3b8", fontSize:11 }}>{row.deduct_date}</span>
+                  <span style={{ color:"#94a3b8", fontSize:11 }}>{toBE(row.deduct_date)}</span>
                 </div>
                 {canEdit(row) && (
                   <div style={{ display:"flex", gap:4 }}>
@@ -320,7 +327,7 @@ export default function DeductionsPage({ role }) {
               <span style={s.typeBadge}>{row.deduction_types?.name}</span>
               <span style={{ fontWeight:600 }}>{fmt(row.amount)} บาท</span>
               {row.note && <span style={{ color:"#64748b", fontSize:12 }}>— {row.note}</span>}
-              <span style={{ color:"#94a3b8", fontSize:11 }}>{row.deduct_date}</span>
+              <span style={{ color:"#94a3b8", fontSize:11 }}>{toBE(row.deduct_date)}</span>
             </div>
             <span style={s.lockedBadge}>🔒 หักแล้ว</span>
             {role === "owner" && (

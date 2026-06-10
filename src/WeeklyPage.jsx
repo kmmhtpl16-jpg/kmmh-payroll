@@ -15,9 +15,18 @@ import AdvanceSummaryCard from "./AdvanceSummaryCard";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
+// แสดงวันที่เป็น พ.ศ. วว/ดด/ปปปป (เก็บใน storage ยังเป็น ค.ศ. — แปลงเฉพาะตอนแสดงผล)
 function fmtDate(d) {
   if (!d) return "";
-  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth() + 1]}`;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear() + 543}`;
+}
+// แปลงสตริงวันที่ "YYYY-MM-DD" (ค.ศ.) → "DD/MM/พ.ศ."
+function toBE(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${Number(y) + 543}`;
 }
 function toLocalDateStr(d) {
   const y = d.getFullYear();
@@ -827,7 +836,7 @@ function DetailModal({ detail, onClose }) {
                       <div style={{ fontWeight:600, color:"#374151", fontSize:12, margin:"4px 0" }}>รายการเบิกในรอบนี้</div>
                       {(detail.advItems || []).map((a, i) => (
                         <CalcRow key={i}
-                          label={`− ${a.deduction_types?.name || "เบิก"} (${a.deduct_date})`}
+                          label={`− ${a.deduction_types?.name || "เบิก"} (${toBE(a.deduct_date)})`}
                           value={`(${fmt(a.amount)})`} red />
                       ))}
                     </>
