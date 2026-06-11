@@ -211,7 +211,7 @@ export default function AttendancePage({ role }) {
             } else {
               await supabase.from("leave_balances").insert({
                 employee_id: editRow.employee_id, year: cy, start_date: `${cy}-01-01`,
-                sick_quota: 30, sick_used: leavePreset.leaveType === "sick" ? deductDays : 0,
+                sick_quota: 20, sick_used: leavePreset.leaveType === "sick" ? deductDays : 0,
                 personal_quota: 3, personal_used: leavePreset.leaveType === "personal" ? deductDays : 0,
               });
             }

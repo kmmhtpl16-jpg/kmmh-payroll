@@ -131,7 +131,7 @@ export default function LeavePage({ role }) {
         ? (emp.trial_start_date || emp.permanent_start_date)
         : emp.trial_start_date;
       const startDate = startStr ? new Date(startStr) : new Date(currentYear, 0, 1);
-      const sickQ  = calcProRataQuota(30, startDate, YEAR);
+      const sickQ  = calcProRataQuota(20, startDate, YEAR);
       const persQ  = emp.emp_type === "permanent"
         ? calcProRataQuota(3, new Date(emp.permanent_start_date || startStr), YEAR)
         : 0; // ทดลองงาน = ไม่ได้ลากิจ
@@ -266,7 +266,7 @@ export default function LeavePage({ role }) {
             ? (selectedEmp.trial_start_date || selectedEmp.permanent_start_date)
             : selectedEmp.trial_start_date;
           const startDate = startStr ? new Date(startStr) : new Date(currentYear, 0, 1);
-          const sickQ = calcProRataQuota(30, startDate, YEAR);
+          const sickQ = calcProRataQuota(20, startDate, YEAR);
           const persQ = selectedEmp.emp_type === "permanent"
             ? calcProRataQuota(3, new Date(selectedEmp.permanent_start_date || startStr), YEAR)
             : 0;
