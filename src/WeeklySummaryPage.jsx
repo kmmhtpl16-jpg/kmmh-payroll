@@ -488,7 +488,7 @@ export default function WeeklySummaryPage({ role }) {
                   style={{...s.btn,...s.btnExcel}}>📊 Excel</button>
                 {!c.is_paid && role==="owner" && (
                   <button onClick={()=>handleMarkPaid(c)}
-                    style={{...s.btn,...s.btnSuccess}}>✅ Mark จ่ายแล้ว</button>
+                    style={{...s.btn,...s.btnSuccess}}>✅ อนุมัติจ่าย (บันทึกยอด)</button>
                 )}
               </div>
 
