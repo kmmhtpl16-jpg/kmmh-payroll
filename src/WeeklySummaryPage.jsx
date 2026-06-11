@@ -5,16 +5,22 @@
 // - ดูสรุปการมาทำงาน + สาย + OT รายคน ต่อรอบ
 // - บันทึก pay_cycles ลง Supabase
 // - ออก Excel สรุปรอบ
+//
+// 🔧 v2 [#9] หักสายใช้ calcLateDeduction ร่วมกับ payrollCalc (single source of truth)
+//   เดิมหน้านี้คิดหักสายแบบย่อ (>60นาที = hourlyRate+1, เรต=1 ตายตัว, ไม่บวก hr_extra_deduct)
+//   → ยอดเสาร์ไม่ตรงสิ้นเดือน. แก้: import calcLateDeduction + โหลด late_tags (เรตจริงรายวัน)
+//   + บวก hr_extra_deduct ให้ครบ → หักสายเสาร์/สิ้นเดือนตรงกันเป๊ะ
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
+import { calcLateDeduction } from "./payrollCalc";
 import * as XLSX from "xlsx";
 
 const MONTHS_TH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.",
   "ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
-const fmt  = (n) => Number(n||0).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt = (n) => Number(n||0).toLocaleString("th-TH",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtI = (n) => Number(n||0).toLocaleString("th-TH");
 
 // ─── helper: วันในเดือน ────────────────────────────────────
@@ -29,8 +35,8 @@ function toDateStr(year, month, day) {
 }
 
 // ─── helper: สร้าง range รอบจ่ายครอบทั้งเดือน ─────────────
-// รอบแรก  : วันที่ 1 → เสาร์แรก
-// รอบกลาง : (อาทิตย์หลังเสาร์ก่อน) → เสาร์ถัดไป
+// รอบแรก   : วันที่ 1 → เสาร์แรก
+// รอบกลาง  : (อาทิตย์หลังเสาร์ก่อน) → เสาร์ถัดไป
 // รอบสุดท้าย: (อาทิตย์หลังเสาร์ก่อน) → สิ้นเดือน
 // → ครอบทุกวันในเดือน ไม่มีวันหลุด
 // → รองรับ 4 หรือ 5 เสาร์อัตโนมัติ
@@ -48,11 +54,11 @@ function autoWeekRanges(yearAD, month) {
   let rangeFrom = 1; // รอบแรกเริ่มวันที่ 1 เสมอ
 
   saturdays.forEach((sat, i) => {
-    const isLast  = i === saturdays.length - 1;
+    const isLast = i === saturdays.length - 1;
     const rangeTo = isLast ? days : sat; // รอบสุดท้าย → สิ้นเดือน
     ranges.push({
-      date_from:  toDateStr(yearAD, month, rangeFrom),
-      date_to:    toDateStr(yearAD, month, rangeTo),
+      date_from: toDateStr(yearAD, month, rangeFrom),
+      date_to: toDateStr(yearAD, month, rangeTo),
       cycle_date: toDateStr(yearAD, month, sat),
     });
     rangeFrom = sat + 1; // รอบถัดไปเริ่มวันถัดจากเสาร์ (=อาทิตย์ ไม่มีวันทำงาน)
@@ -63,18 +69,19 @@ function autoWeekRanges(yearAD, month) {
 
 export default function WeeklySummaryPage({ role }) {
   const now = new Date();
-  const [yearBE,  setYearBE]  = useState(now.getFullYear() + 543);
-  const [month,   setMonth]   = useState(now.getMonth() + 1);
-  const [cycles,  setCycles]  = useState([]);
+  const [yearBE, setYearBE] = useState(now.getFullYear() + 543);
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [cycles, setCycles] = useState([]);
   const [employees, setEmployees] = useState([]);
-  const [logs,    setLogs]    = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [lateTagMap, setLateTagMap] = useState({}); // 🔧 v2 [#9] เรตค่าปรับรายวัน
   const [loading, setLoading] = useState(false);
-  const [saving,  setSaving]  = useState(false);
-  const [msg,     setMsg]     = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
   const [selectedCycle, setSelectedCycle] = useState(null);
 
   const [draftCycles, setDraftCycles] = useState([]);
-  const [showDraft,   setShowDraft]   = useState(false);
+  const [showDraft, setShowDraft] = useState(false);
 
   useEffect(() => { loadAll(); }, [yearBE, month]);
 
@@ -94,9 +101,20 @@ export default function WeeklySummaryPage({ role }) {
 
       const { data: logData } = await supabase
         .from("attendance_logs")
-        .select("employee_id,work_date,late_minutes,ot_hours,needs_hr_review,scan_am_in,scan_pm_out")
+        .select("employee_id,work_date,late_minutes,ot_hours,hr_extra_deduct,needs_hr_review,scan_am_in,scan_pm_out")
         .gte("work_date", dateFrom).lte("work_date", dateTo);
       setLogs(logData || []);
+
+      // 🔧 v2 [#9] โหลด late_tags → เรตค่าปรับจริงรายวัน (ให้หักสายตรงกับ payrollCalc)
+      const { data: tagData } = await supabase
+        .from("late_tags")
+        .select("employee_id,tag_date,rate_per_minute")
+        .gte("tag_date", dateFrom).lte("tag_date", dateTo);
+      const tagMap = {};
+      (tagData || []).forEach(t => {
+        tagMap[`${t.employee_id}_${t.tag_date}`] = t.rate_per_minute;
+      });
+      setLateTagMap(tagMap);
 
       const { data: period } = await supabase
         .from("pay_periods").select("id")
@@ -119,29 +137,28 @@ export default function WeeklySummaryPage({ role }) {
 
   function calcCycleSummary(dateFrom, dateTo) {
     const from = new Date(dateFrom);
-    const to   = new Date(dateTo);
+    const to = new Date(dateTo);
     return employees.map(emp => {
       const empLogs = logs.filter(l => {
         const d = new Date(l.work_date);
         return l.employee_id === emp.id && d >= from && d <= to;
       });
-      const work_days    = empLogs.filter(l => !l.needs_hr_review).length;
+      const work_days = empLogs.filter(l => !l.needs_hr_review).length;
       const late_minutes = empLogs.reduce((s,l) => s + (l.late_minutes||0), 0);
-      const ot_hours     = empLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
-      const daysInMonth  = getDaysInMonth(yearBE - 543, month);
-      const dailyRate    = emp.emp_type === "permanent"
+      const ot_hours = empLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
+      const daysInMonth = getDaysInMonth(yearBE - 543, month);
+      const dailyRate = emp.emp_type === "permanent"
         ? emp.monthly_salary / daysInMonth
         : (emp.daily_rate || 0);
-      const hourlyRate   = dailyRate / 8;
-      const base_wage    = Math.round(dailyRate * work_days * 100) / 100;
-      const ot_amount    = Math.round(hourlyRate * ot_hours * 100) / 100;
+      const hourlyRate = dailyRate / 8;
+      const base_wage = Math.round(dailyRate * work_days * 100) / 100;
+      const ot_amount = Math.round(hourlyRate * ot_hours * 100) / 100;
+      // 🔧 v2 [#9] หักสายใช้ฟังก์ชันร่วมกับ payrollCalc + เรตจริง (late_tags) + hr_extra_deduct
       let late_deduct = 0;
       empLogs.forEach(l => {
-        const m = l.late_minutes || 0;
-        if (m <= 0) return;
-        if (m <= 40) late_deduct += m;
-        else if (m <= 60) late_deduct += hourlyRate;
-        else late_deduct += hourlyRate + 1;
+        const rateTag = lateTagMap[`${emp.id}_${l.work_date}`] || 1;
+        late_deduct += calcLateDeduction(l.late_minutes || 0, rateTag, hourlyRate);
+        late_deduct += parseFloat(l.hr_extra_deduct || 0);
       });
       late_deduct = Math.round(late_deduct * 100) / 100;
       const subtotal = Math.floor(base_wage + ot_amount - late_deduct);
@@ -177,11 +194,11 @@ export default function WeeklySummaryPage({ role }) {
       }
 
       const rows = draftCycles.map(d => ({
-        period_id:  period.id,
+        period_id: period.id,
         cycle_date: d.cycle_date,
-        date_from:  d.date_from,
-        date_to:    d.date_to,
-        note:       d.note || null,
+        date_from: d.date_from,
+        date_to: d.date_to,
+        note: d.note || null,
       }));
 
       const { error } = await supabase
@@ -445,8 +462,8 @@ const s = {
     fontWeight:600, fontSize:13, cursor:"pointer" },
   btnPrimary: { background:"#2563eb", color:"#fff" },
   btnSuccess: { background:"#16a34a", color:"#fff" },
-  btnExcel:   { background:"#0f766e", color:"#fff" },
-  btnGray:    { background:"#f1f5f9", color:"#374151", border:"1px solid #e2e8f0" },
+  btnExcel: { background:"#0f766e", color:"#fff" },
+  btnGray: { background:"#f1f5f9", color:"#374151", border:"1px solid #e2e8f0" },
   msg: { padding:"10px 14px", borderRadius:8, border:"1px solid",
     marginBottom:12, fontWeight:600, fontSize:14 },
   card: { background:"#fff", borderRadius:12, padding:16,

@@ -1,7 +1,14 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.4
+// คำนวณเงินเดือน KMMH — v7.5
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.5 เปลี่ยนจาก v7.4:
+//   • [#9] export `calcLateDeduction` ออกมาเป็น single source of truth
+//     ให้ WeeklySummaryPage (หน้ารอบจ่ายเสาร์) import ไปใช้แทนสูตรหักสายแบบย่อ
+//     → หักสายวันเสาร์ตรงกับยอดสิ้นเดือนเป๊ะ (เดิมหน้าเสาร์คิด >60นาที = hourlyRate+1
+//       และใช้เรต=1 ตายตัว ไม่อ่าน late_tags → จ่ายเกินวันเสาร์ แล้วโป๊ะสิ้นเดือน)
+//     ไม่มีการเปลี่ยน logic การคำนวณใดๆ ในไฟล์นี้ แค่เปิด export ฟังก์ชันเดิม
 //
 // 🔧 v7.4 เปลี่ยนจาก v7.3:
 //   • [#7] เบิกอ่านที่เดียว — advance_total คิดจาก deductions (ชนิดเบิก) ที่เดียว
@@ -93,7 +100,8 @@ function countSundays(year, month, fromDay = 1) {
 }
 
 // หักสายรายวัน (logic v2)
-function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
+// 🔧 v7.5 [#9] export ให้ WeeklySummaryPage ใช้ร่วม → หักสายเสาร์/สิ้นเดือนตรงกัน
+export function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
   if (!lateMin || lateMin <= 0) return 0;
   const rate = ratePerMin || 1;
   if (lateMin <= 40) return lateMin * rate;
