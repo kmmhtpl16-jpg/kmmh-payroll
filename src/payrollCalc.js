@@ -260,6 +260,8 @@ export async function calcPayroll(year, month) {
     let trial_base   = 0;
     let has_review   = false;
     let has_leave    = false;
+    let leave_days   = 0;   // 🆕 จำนวนวันลาครึ่งวัน (0.5 ต่อครั้ง)
+    let leave_deduct = 0;   // 🆕 หักค่าแรงครึ่งวันอัตโนมัติ
 
     for (const log of empLogs) {
       if (log.needs_hr_review) has_review = true;
@@ -283,6 +285,13 @@ export async function calcPayroll(year, month) {
       ot_hours += parseFloat(log.ot_hours || 0);
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
+
+      // 🆕 ลาครึ่งวัน → มาทำงานครึ่งวัน base_wage บวกเต็มวันไปแล้ว
+      //   จึงหักคืนครึ่งวัน (dayRate / 2) เป็น leave_deduct → จ่ายจริงครึ่งวัน
+      if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) {
+        leave_deduct += dayRate / 2;
+        leave_days   += 0.5;
+      }
 
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
@@ -351,7 +360,7 @@ export async function calcPayroll(year, month) {
     ).toFixed(2));
 
     const total_deduct = parseFloat((
-      late_deduct + social_security + job_insurance +
+      late_deduct + leave_deduct + social_security + job_insurance +
       app_fee_deduct + advance_total + loan_deduct + other_deduct
     ).toFixed(2));
 
@@ -379,8 +388,8 @@ export async function calcPayroll(year, month) {
       other_income,
       late_minutes,
       late_deduct:       parseFloat(late_deduct.toFixed(2)),
-      leave_days:        0,
-      leave_deduct:      0,
+      leave_days:        parseFloat(leave_days.toFixed(2)),
+      leave_deduct:      parseFloat(leave_deduct.toFixed(2)),
       social_security,
       job_insurance,
       app_fee_deduct,

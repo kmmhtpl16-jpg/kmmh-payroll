@@ -142,9 +142,15 @@ export default function AttendancePage({ role }) {
     const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
     const isFullDayAbsence = !!fullDayNote;
 
-    const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
-    // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด หรือ เป็นลา/ขาดทั้งวัน
-    const isDone = allFilled || isFullDayAbsence;
+    // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
+    //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
+    const isHalfDayLeave = editValues.hr_note === "ลาครึ่งวัน";
+    const amFilled = am_in !== "" && am_out !== "";
+    const pmFilled = pm_in !== "" && pm_out !== "";
+
+    const allFilled = amFilled && pmFilled;
+    // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
+    const isDone = allFilled || isFullDayAbsence || (isHalfDayLeave && (amFilled || pmFilled));
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -170,6 +176,8 @@ export default function AttendancePage({ role }) {
     } else {
       const doneText = isFullDayAbsence
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
+        : (isHalfDayLeave && isDone)
+        ? " — ลาครึ่งวัน ปลด 🟡 แล้ว (ระบบหักครึ่งวันให้ตอนคำนวณเงินเดือน)"
         : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
       setEditMsg({ type: "ok", text: "✅ บันทึกแล้ว" + doneText });
       setReviewLogs(prev => prev.filter(l => l.id !== editRow.id || !isDone));
@@ -461,6 +469,7 @@ export default function AttendancePage({ role }) {
                   background:"#f0fdf4", padding:"4px 8px", borderRadius:6,
                   border:"1px solid #bbf7d0" }}>
                   💡 ปุ่มสีเขียว (ลา/ขาด/วันหยุด ทั้งวัน) — กดแล้วกด "บันทึก" ได้เลย ไม่ต้องกรอกเวลา
+                  <br />🔵 ลาครึ่งวัน — กรอกเวลาแค่ครึ่งที่มาทำงาน (เช้า หรือ บ่าย) ก็กด "บันทึก" ได้ ระบบหักครึ่งวันให้เอง
                 </p>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
                   {HR_NOTE_PRESETS.map(p => {
