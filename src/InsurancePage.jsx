@@ -307,14 +307,6 @@ export default function InsurancePage({ role }) {
             {employees.map(emp => {
               const bal = balances[emp.id] || 0;
               const isResigned = !!emp.resigned_date;
-              // คำนวณจำนวนเดือนที่ควรสะสม
-              const allMonths = emp.permanent_start_date
-                ? monthsBetween(emp.permanent_start_date)
-                : [];
-              const existingDeps = history.filter(
-                r => r.employee_id === emp.id && r.entry_type === "deposit"
-              ).length;
-              const missing = allMonths.length - existingDeps;
 
               return (
                 <tr key={emp.id} className={isResigned ? "ins-row--resigned" : ""}>
@@ -333,11 +325,8 @@ export default function InsurancePage({ role }) {
                     </span>
                   </td>
                   <td>
-                    {missing > 0 && !isResigned && (
-                      <span className="ins-badge ins-badge--warn">ขาด {missing} เดือน</span>
-                    )}
-                    {missing === 0 && !isResigned && (
-                      <span className="ins-badge ins-badge--ok">ครบ</span>
+                    {!isResigned && (
+                      <span className="ins-badge ins-badge--ok">กำลังสะสม</span>
                     )}
                     {isResigned && bal === 0 && (
                       <span className="ins-badge ins-badge--done">คืนแล้ว</span>
