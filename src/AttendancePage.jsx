@@ -9,9 +9,10 @@ import ImportConflictModal from "./ImportConflictModal";
 // fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
 // fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
 const HR_NOTE_PRESETS = [
-  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true },
-  { label: "ลากิจ", value: "ลากิจ", fullDay: true },
-  { label: "ลาครึ่งวัน", value: "ลาครึ่งวัน", fullDay: false },
+  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true, leaveType: "sick" },
+  { label: "ลากิจ", value: "ลากิจ", fullDay: true, leaveType: "personal" },
+  { label: "ลาป่วยครึ่งวัน", value: "ลาป่วยครึ่งวัน", fullDay: false, leaveType: "sick", half: true },
+  { label: "ลากิจครึ่งวัน", value: "ลากิจครึ่งวัน", fullDay: false, leaveType: "personal", half: true },
   { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false },
   { label: "ขาดงาน", value: "ขาดงาน", fullDay: true },
   { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true },
@@ -96,7 +97,7 @@ export default function AttendancePage({ role }) {
     const { data, error } = await supabase
       .from("attendance_logs")
       .select("*, employees(nickname, emp_code)")
-      .eq("needs_hr_review", true)
+      .or("needs_hr_review.eq.true,hr_edited_at.not.is.null")
       .order("work_date", { ascending: false })
       .limit(100);
     if (!error) setReviewLogs(data || []);
@@ -104,6 +105,8 @@ export default function AttendancePage({ role }) {
   };
 
   const openEdit = (log) => {
+    // 🆕 #1.1 รายการที่แก้ไปแล้ว = ล็อก เปิดแก้ซ้ำไม่ได้
+    if (!log.needs_hr_review && log.hr_edited_at) return;
     setEditRow(log);
     setEditValues({
       scan_am_in: log.scan_am_in || "",
@@ -144,7 +147,8 @@ export default function AttendancePage({ role }) {
 
     // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
     //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
-    const isHalfDayLeave = editValues.hr_note === "ลาครึ่งวัน";
+    const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
+    const isHalfDayLeave = !!(leavePreset && leavePreset.half);
     const amFilled = am_in !== "" && am_out !== "";
     const pmFilled = pm_in !== "" && pm_out !== "";
 
@@ -168,20 +172,60 @@ export default function AttendancePage({ role }) {
         needs_hr_review: isDone ? false : true,
         is_confirmed: isDone ? true : false,
         updated_at: new Date().toISOString(),
+        hr_edited_at: new Date().toISOString(),
+        hr_edited_by: role || null,
       })
       .eq("id", editRow.id);
 
     if (error) {
       setEditMsg({ type: "error", text: "❌ " + error.message });
     } else {
+      // 🆕 #1.2 ลาป่วย/ลากิจ (เต็ม/ครึ่ง) → บันทึกลงหน้า "การลา" + ตัดสิทธิ์
+      if (leavePreset && isDone) {
+        try {
+          const cy = new Date().getFullYear();
+          const deductDays = leavePreset.half ? 0.5 : 1.0;
+          const usedField = leavePreset.leaveType === "sick" ? "sick_used" : "personal_used";
+          const quotaField = leavePreset.leaveType === "sick" ? "sick_quota" : "personal_quota";
+          const { data: exist } = await supabase.from("leave_requests")
+            .select("id").eq("employee_id", editRow.employee_id)
+            .eq("leave_date", editRow.work_date).limit(1);
+          if (!exist || exist.length === 0) {
+            const { data: bal } = await supabase.from("leave_balances")
+              .select("*").eq("employee_id", editRow.employee_id).eq("year", cy).maybeSingle();
+            const remain = bal ? (Number(bal[quotaField]) - Number(bal[usedField])) : (leavePreset.leaveType === "sick" ? 30 : 3);
+            await supabase.from("leave_requests").insert({
+              employee_id: editRow.employee_id,
+              leave_type: leavePreset.leaveType,
+              leave_date: editRow.work_date,
+              unit: "day",
+              hours: leavePreset.half ? 4 : null,
+              is_within_quota: remain >= deductDays,
+              deduct_amount: 0,
+              note: (editValues.hr_note || "") + " (จากบันทึกเวลา)",
+            });
+            if (bal) {
+              await supabase.from("leave_balances")
+                .update({ [usedField]: (Number(bal[usedField]) || 0) + deductDays })
+                .eq("employee_id", editRow.employee_id).eq("year", cy);
+            } else {
+              await supabase.from("leave_balances").insert({
+                employee_id: editRow.employee_id, year: cy, start_date: `${cy}-01-01`,
+                sick_quota: 30, sick_used: leavePreset.leaveType === "sick" ? deductDays : 0,
+                personal_quota: 3, personal_used: leavePreset.leaveType === "personal" ? deductDays : 0,
+              });
+            }
+          }
+        } catch (e) { console.error("leave sync", e); }
+      }
       const doneText = isFullDayAbsence
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
         : (isHalfDayLeave && isDone)
-        ? " — ลาครึ่งวัน ปลด 🟡 แล้ว (ระบบหักครึ่งวันให้ตอนคำนวณเงินเดือน)"
+        ? ` — ${editValues.hr_note} ปลด 🟡 แล้ว (จ่ายเต็มวัน · ลงหน้าการลาแล้ว)`
         : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
       setEditMsg({ type: "ok", text: "✅ บันทึกแล้ว" + doneText });
       setReviewLogs(prev => prev.filter(l => l.id !== editRow.id || !isDone));
-      if (isDone) setTimeout(() => setEditRow(null), 800);
+      if (isDone) setTimeout(() => { setEditRow(null); loadReviewLogs(); }, 800);
     }
     setSavingEdit(false);
   };
@@ -350,8 +394,8 @@ export default function AttendancePage({ role }) {
             <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>🎉 ไม่มีรายการที่ต้องตรวจแล้ว</p>
           )}
 
-          {reviewLogs.map(log => (
-            <div key={log.id} style={s.reviewCard}>
+          {reviewLogs.map(log => { const locked = !log.needs_hr_review && !!log.hr_edited_at; return (
+            <div key={log.id} style={{ ...s.reviewCard, ...(locked ? s.reviewCardLocked : {}) }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                 <div>
                   <span style={{ fontWeight:700, fontSize:14 }}>{log.employees?.nickname || log.employee_id}</span>
@@ -363,7 +407,7 @@ export default function AttendancePage({ role }) {
                     </span>
                   )}
                 </div>
-                <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>
+                {locked ? <span style={s.lockedTag}>✏️ แก้ไขแล้ว 🔒</span> : <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>}
               </div>
               <div style={{ display:"flex", gap:16, marginTop:8, fontSize:13 }}>
                 {[["เข้าเช้า", log.scan_am_in], ["พักออก", log.scan_am_out],
@@ -376,7 +420,7 @@ export default function AttendancePage({ role }) {
                 ))}
               </div>
             </div>
-          ))}
+          );})}
         </div>
       )}
 
@@ -469,7 +513,7 @@ export default function AttendancePage({ role }) {
                   background:"#f0fdf4", padding:"4px 8px", borderRadius:6,
                   border:"1px solid #bbf7d0" }}>
                   💡 ปุ่มสีเขียว (ลา/ขาด/วันหยุด ทั้งวัน) — กดแล้วกด "บันทึก" ได้เลย ไม่ต้องกรอกเวลา
-                  <br />🔵 ลาครึ่งวัน — กรอกเวลาแค่ครึ่งที่มาทำงาน (เช้า หรือ บ่าย) ก็กด "บันทึก" ได้ ระบบหักครึ่งวันให้เอง
+                  <br />🔵 ลาป่วย/ลากิจครึ่งวัน — กรอกครึ่งที่มาทำงานก็กด "บันทึก" ได้ จ่ายเต็มวัน + ลงหน้าการลาให้เอง
                 </p>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
                   {HR_NOTE_PRESETS.map(p => {
@@ -482,7 +526,7 @@ export default function AttendancePage({ role }) {
                           ...(p.fullDay ? s.presetBtnFullDay : {}),
                           ...(isActive ? (p.fullDay ? s.presetBtnFullDayActive : s.presetBtnActive) : {}),
                         }}>
-                        {p.fullDay ? "🟢 " : ""}{p.label}
+                        {p.fullDay ? "🟢 " : p.half ? "🔵 " : ""}{p.label}
                       </button>
                     );
                   })}
@@ -594,6 +638,9 @@ const s = {
     border:"1.5px solid #fde68a", background:"#fffbeb", marginBottom:8 },
   editBtn: { padding:"6px 14px", borderRadius:8, border:"1.5px solid #e2e8f0",
     background:"#fff", cursor:"pointer", fontWeight:600, fontSize:13 },
+  reviewCardLocked: { border:"1.5px solid #bbf7d0", background:"#f0fdf4" },
+  lockedTag: { padding:"6px 12px", borderRadius:8, background:"#dcfce7",
+    color:"#166534", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
   importCard: { display:"flex", alignItems:"flex-start", gap:12,
     padding:"12px 14px", borderRadius:10, border:"1px solid #e2e8f0", marginBottom:8 },
   deleteBtn: { background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626",
