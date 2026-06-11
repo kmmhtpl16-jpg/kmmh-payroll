@@ -15,6 +15,14 @@
 //   (1) ข้ามวันอาทิตย์ใน work_days/OT/สาย ให้ตรง payrollCalc (อาทิตย์จ่ายเป็นค่าอาทิตย์สิ้นเดือน)
 //   (2) เพิ่มตาราง "กระทบยอดทั้งเดือน" (read-only, ไม่เขียน DB): คงเหลือสิ้นเดือน = สุทธิ − Σเสาร์
 //       → ทำให้ Σเสาร์ + สิ้นเดือน = สุทธิทั้งเดือน เห็นชัด + เตือนถ้าติดลบ (จ่ายเสาร์เกิน)
+//
+// 🔧 v4 [snapshot] แช่แข็งยอดจ่ายจริงตอนกด "จ่ายแล้ว" (คอลัมน์ pay_cycles.paid_lines jsonb):
+//   ปัญหา: ถ้าจ่ายเสาร์ไปแล้ว แล้วทีหลังเพิ่งรู้ว่าสายเช้า (เช่น import จันทร์) ระบบคำนวณ
+//   ยอดเสาร์ "สด" ใหม่ → ลืมว่าจ่ายจริงไปเท่าไหร่ → ส่วนต่าง (เช่น −10) หายไป ไม่ได้หักสิ้นเดือน.
+//   แก้: ตอน mark paid เก็บ snapshot {employee_id: subtotal} ลง paid_lines. กระทบยอด+การ์ด
+//   ใช้ snapshot (ยอดจ่ายจริง) สำหรับรอบที่จ่ายแล้ว → ส่วนต่างที่เกิดทีหลังไหลไปหักสิ้นเดือน
+//   อัตโนมัติ + การ์ดเตือน "ข้อมูลเปลี่ยนหลังจ่าย". รอบที่ยังไม่จ่าย/ไม่มี snapshot = คำนวณสด.
+//   ต้องมีคอลัมน์ DB ก่อน:  alter table pay_cycles add column if not exists paid_lines jsonb;
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from "react";
@@ -243,14 +251,42 @@ export default function WeeklySummaryPage({ role }) {
     }
   };
 
-  const handleMarkPaid = async (cycleId) => {
+  // 🔧 v4 [snapshot] ตอนกด "จ่ายแล้ว" → แช่แข็งยอดจ่ายจริงต่อคน (subtotal) ลง paid_lines
+  const handleMarkPaid = async (cycle) => {
+    const summary = calcCycleSummary(cycle.date_from, cycle.date_to);
+    const paid_lines = {};
+    summary.forEach(r => { paid_lines[r.emp.id] = r.subtotal; });
     const { error } = await supabase
       .from("pay_cycles")
-      .update({ is_paid: true, paid_at: new Date().toISOString(), paid_by_role: role })
-      .eq("id", cycleId);
+      .update({ is_paid: true, paid_at: new Date().toISOString(), paid_by_role: role, paid_lines })
+      .eq("id", cycle.id);
     if (error) { setMsg({ type:"error", text:"❌ " + error.message }); return; }
-    setMsg({ type:"ok", text:"✅ mark จ่ายแล้วสำเร็จ" });
+    setMsg({ type:"ok", text:"✅ mark จ่ายแล้ว + บันทึกยอด snapshot" });
     loadAll();
+  };
+
+  // 🔧 v4 [snapshot/backfill] เติม snapshot ให้รอบที่ "จ่ายแล้ว" แต่ยังไม่มี paid_lines (ครั้งเดียว)
+  //   จับยอดปัจจุบันเป็น snapshot — แม่นสุดถ้ากดก่อนข้อมูลถูกแก้
+  const handleBackfillSnapshots = async () => {
+    const targets = cycles.filter(c => c.is_paid && !c.paid_lines);
+    if (targets.length === 0) { setMsg({ type:"ok", text:"✅ รอบที่จ่ายแล้วมี snapshot ครบทุกอันแล้ว" }); return; }
+    if (!window.confirm(`ถ่าย snapshot ยอดปัจจุบันให้ ${targets.length} รอบที่จ่ายแล้ว (ยังไม่มี)?`)) return;
+    setSaving(true);
+    try {
+      for (const c of targets) {
+        const summary = calcCycleSummary(c.date_from, c.date_to);
+        const paid_lines = {};
+        summary.forEach(r => { paid_lines[r.emp.id] = r.subtotal; });
+        const { error } = await supabase.from("pay_cycles").update({ paid_lines }).eq("id", c.id);
+        if (error) throw new Error(error.message);
+      }
+      setMsg({ type:"ok", text:`✅ ถ่าย snapshot ${targets.length} รอบสำเร็จ` });
+      loadAll();
+    } catch(e) {
+      setMsg({ type:"error", text:"❌ backfill ไม่สำเร็จ: " + e.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleExport = (cycle) => {
@@ -286,17 +322,25 @@ export default function WeeklySummaryPage({ role }) {
 
   const selSummary = selectedCycle ? calcCycleSummary(selectedCycle.date_from, selectedCycle.date_to) : [];
 
-  // 🔧 v3 [#9] กระทบยอดทั้งเดือน: รวม subtotal เสาร์ทุกรอบต่อคน → คงเหลือสิ้นเดือน = สุทธิ − Σเสาร์
-  const cycleSummaries = cycles.map(c => calcCycleSummary(c.date_from, c.date_to));
+  // 🔧 v4 [snapshot] ยอดต่อคนของรอบ {employee_id: subtotal}
+  //   จ่ายแล้ว + มี snapshot → ใช้ paid_lines (ยอดจ่ายจริง, แช่แข็ง)
+  //   ไม่งั้น → คำนวณสด (รอบยังไม่จ่าย หรือรอบเก่ายังไม่ backfill)
+  const cyclePaidMap = (cycle) => {
+    if (cycle.is_paid && cycle.paid_lines) return cycle.paid_lines;
+    const map = {};
+    calcCycleSummary(cycle.date_from, cycle.date_to).forEach(r => { map[r.emp.id] = r.subtotal; });
+    return map;
+  };
+
+  // 🔧 v3+v4 [#9] กระทบยอดทั้งเดือน: คงเหลือสิ้นเดือน = สุทธิ − Σ(ยอดจ่ายจริงเสาร์ทุกรอบ)
   const reconRows = employees.map(emp => {
     let satSum = 0;
-    cycleSummaries.forEach(arr => {
-      const r = arr.find(x => x.emp.id === emp.id);
-      if (r) satSum += r.subtotal;
-    });
+    cycles.forEach(c => { satSum += Number(cyclePaidMap(c)[emp.id] || 0); });
     const net = Math.round(netByEmp[emp.id] || 0);
     return { emp, net, satSum, monthEnd: net - satSum };
   }).filter(r => r.net !== 0 || r.satSum !== 0);
+
+  const hasUnsnappedPaid = cycles.some(c => c.is_paid && !c.paid_lines);
 
   return (
     <div style={s.page}>
@@ -394,7 +438,12 @@ export default function WeeklySummaryPage({ role }) {
 
         {cycles.map((c, i) => {
           const summary = calcCycleSummary(c.date_from, c.date_to);
-          const totalNet = summary.reduce((s,r)=>s+r.subtotal, 0);
+          const liveTotal = summary.reduce((s,r)=>s+r.subtotal, 0);
+          // 🔧 v4 [snapshot] รอบที่จ่ายแล้ว + มี snapshot → หัวการ์ดโชว์ "ยอดจ่ายจริง"
+          const snap = (c.is_paid && c.paid_lines) ? c.paid_lines : null;
+          const paidTotal = snap ? Object.values(snap).reduce((a,b)=>a+Number(b||0),0) : liveTotal;
+          const totalNet = snap ? paidTotal : liveTotal;
+          const delta = snap ? (liveTotal - paidTotal) : 0; // ข้อมูลเปลี่ยนหลังจ่าย
           const hasReview = summary.some(r=>r.has_review);
           const isSelected = selectedCycle?.id === c.id;
 
@@ -416,8 +465,18 @@ export default function WeeklySummaryPage({ role }) {
                 </div>
                 <div style={{fontWeight:700,fontSize:16,color:"#1e3a5f"}}>
                   รวม {fmtI(totalNet)} บ.
+                  {snap && <span style={{fontSize:11,color:"#64748b",fontWeight:500,marginLeft:6}}>(ยอดจ่ายจริง)</span>}
                 </div>
               </div>
+
+              {/* 🔧 v4 [snapshot] ข้อมูลเปลี่ยนหลังจ่าย → ส่วนต่างไปหัก/เพิ่มที่สิ้นเดือน */}
+              {snap && Math.abs(delta) >= 1 && (
+                <div style={{marginTop:8,padding:"6px 10px",borderRadius:8,fontSize:12.5,
+                  background:"#fffbeb",border:"1px solid #fde68a",color:"#92400e"}}>
+                  ⚠️ ข้อมูลเปลี่ยนหลังจ่าย — ตอนนี้คำนวณได้ {fmtI(liveTotal)} (จ่ายจริง {fmtI(paidTotal)}) →
+                  ส่วนต่าง {delta>0?"+":""}{fmtI(delta)} บ. จะไป{delta<0?"หัก":"เพิ่ม"}ที่ "คงเหลือสิ้นเดือน" อัตโนมัติ
+                </div>
+              )}
 
               <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
                 <button onClick={()=>setSelectedCycle(isSelected?null:c)}
@@ -428,7 +487,7 @@ export default function WeeklySummaryPage({ role }) {
                 <button onClick={()=>handleExport(c)}
                   style={{...s.btn,...s.btnExcel}}>📊 Excel</button>
                 {!c.is_paid && role==="owner" && (
-                  <button onClick={()=>handleMarkPaid(c.id)}
+                  <button onClick={()=>handleMarkPaid(c)}
                     style={{...s.btn,...s.btnSuccess}}>✅ Mark จ่ายแล้ว</button>
                 )}
               </div>
@@ -492,6 +551,19 @@ export default function WeeklySummaryPage({ role }) {
         <p style={{margin:"0 0 12px",fontSize:12,color:"#64748b"}}>
           คงเหลือสิ้นเดือน = สุทธิทั้งเดือน − เสาร์ที่จ่ายแล้ว → "จ่ายเสาร์รวม + คงเหลือสิ้นเดือน" ต้อง = สุทธิทั้งเดือน เสมอ
         </p>
+
+        {/* 🔧 v4 [snapshot/backfill] เตือน owner ถ้ามีรอบจ่ายแล้วยังไม่ได้แช่แข็งยอด */}
+        {role==="owner" && hasUnsnappedPaid && (
+          <div style={{margin:"0 0 12px",padding:"8px 12px",borderRadius:8,fontSize:12.5,
+            background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1e40af",
+            display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+            <span>มีรอบที่จ่ายแล้วแต่ยังไม่ได้แช่แข็งยอด (snapshot) — กดเพื่อจับยอดปัจจุบันไว้</span>
+            <button onClick={handleBackfillSnapshots} disabled={saving}
+              style={{...s.btn,...s.btnPrimary,fontSize:12,padding:"6px 12px"}}>
+              📸 ถ่าย snapshot รอบที่จ่ายแล้ว
+            </button>
+          </div>
+        )}
         {cycles.length === 0 ? (
           <p style={{color:"#9ca3af",textAlign:"center",padding:16}}>
             ยังไม่มีรอบเสาร์ — สร้างรอบก่อนถึงจะกระทบยอดได้
