@@ -10,11 +10,16 @@
 //   เดิมหน้านี้คิดหักสายแบบย่อ (>60นาที = hourlyRate+1, เรต=1 ตายตัว, ไม่บวก hr_extra_deduct)
 //   → ยอดเสาร์ไม่ตรงสิ้นเดือน. แก้: import calcLateDeduction + โหลด late_tags (เรตจริงรายวัน)
 //   + บวก hr_extra_deduct ให้ครบ → หักสายเสาร์/สิ้นเดือนตรงกันเป๊ะ
+//
+// 🔧 v3 [#9] ปิด invariant ให้ครบ:
+//   (1) ข้ามวันอาทิตย์ใน work_days/OT/สาย ให้ตรง payrollCalc (อาทิตย์จ่ายเป็นค่าอาทิตย์สิ้นเดือน)
+//   (2) เพิ่มตาราง "กระทบยอดทั้งเดือน" (read-only, ไม่เขียน DB): คงเหลือสิ้นเดือน = สุทธิ − Σเสาร์
+//       → ทำให้ Σเสาร์ + สิ้นเดือน = สุทธิทั้งเดือน เห็นชัด + เตือนถ้าติดลบ (จ่ายเสาร์เกิน)
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-import { calcLateDeduction } from "./payrollCalc";
+import { calcLateDeduction, calcPayroll } from "./payrollCalc";
 import * as XLSX from "xlsx";
 
 const MONTHS_TH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.",
@@ -26,6 +31,13 @@ const fmtI = (n) => Number(n||0).toLocaleString("th-TH");
 // ─── helper: วันในเดือน ────────────────────────────────────
 function getDaysInMonth(year, month) {
   return new Date(year, month, 0).getDate();
+}
+
+// ─── helper: เป็นวันอาทิตย์ไหม (parse local ให้ตรง payrollCalc) ───
+// 🔧 v3 [#9] ใช้ข้ามวันอาทิตย์ในรอบเสาร์ — อาทิตย์เป็นค่าอาทิตย์ จ่ายตอนสิ้นเดือน
+function isSunday(dateStr) {
+  const [y, m, d] = String(dateStr).slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d).getDay() === 0;
 }
 
 // ─── helper: format วันที่เป็น YYYY-MM-DD ไม่ผ่าน timezone ───
@@ -75,6 +87,7 @@ export default function WeeklySummaryPage({ role }) {
   const [employees, setEmployees] = useState([]);
   const [logs, setLogs] = useState([]);
   const [lateTagMap, setLateTagMap] = useState({}); // 🔧 v2 [#9] เรตค่าปรับรายวัน
+  const [netByEmp, setNetByEmp] = useState({});     // 🔧 v3 [#9] สุทธิทั้งเดือน (net_pay) รายคน
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -128,6 +141,17 @@ export default function WeeklySummaryPage({ role }) {
       } else {
         setCycles([]);
       }
+
+      // 🔧 v3 [#9] โหลดสุทธิทั้งเดือน (net_pay) ต่อคน เพื่อกระทบยอดกับยอดเสาร์
+      //   (read-only — เรียกคำนวณ ไม่บันทึก. ถ้าพังก็ปล่อยว่าง ไม่ให้กระทบหน้าหลัก)
+      try {
+        const { results } = await calcPayroll(yearAD, month);
+        const nmap = {};
+        (results || []).forEach(r => { nmap[r.employee_id] = r.net_pay; });
+        setNetByEmp(nmap);
+      } catch (_) {
+        setNetByEmp({});
+      }
     } catch(e) {
       setMsg({ type:"error", text:"❌ โหลดข้อมูลไม่สำเร็จ: " + e.message });
     } finally {
@@ -143,9 +167,11 @@ export default function WeeklySummaryPage({ role }) {
         const d = new Date(l.work_date);
         return l.employee_id === emp.id && d >= from && d <= to;
       });
-      const work_days = empLogs.filter(l => !l.needs_hr_review).length;
-      const late_minutes = empLogs.reduce((s,l) => s + (l.late_minutes||0), 0);
-      const ot_hours = empLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
+      // 🔧 v3 [#9] ข้ามวันอาทิตย์ให้ตรง payrollCalc (อาทิตย์จ่ายเป็นค่าอาทิตย์ตอนสิ้นเดือน)
+      const workLogs = empLogs.filter(l => !isSunday(l.work_date));
+      const work_days = workLogs.filter(l => !l.needs_hr_review).length;
+      const late_minutes = workLogs.reduce((s,l) => s + (l.late_minutes||0), 0);
+      const ot_hours = workLogs.reduce((s,l) => s + (l.ot_hours||0), 0);
       const daysInMonth = getDaysInMonth(yearBE - 543, month);
       const dailyRate = emp.emp_type === "permanent"
         ? emp.monthly_salary / daysInMonth
@@ -154,8 +180,9 @@ export default function WeeklySummaryPage({ role }) {
       const base_wage = Math.round(dailyRate * work_days * 100) / 100;
       const ot_amount = Math.round(hourlyRate * ot_hours * 100) / 100;
       // 🔧 v2 [#9] หักสายใช้ฟังก์ชันร่วมกับ payrollCalc + เรตจริง (late_tags) + hr_extra_deduct
+      //   v3: คิดบน workLogs (ไม่รวมอาทิตย์) ให้ตรง payrollCalc ที่ continue ข้ามอาทิตย์
       let late_deduct = 0;
-      empLogs.forEach(l => {
+      workLogs.forEach(l => {
         const rateTag = lateTagMap[`${emp.id}_${l.work_date}`] || 1;
         late_deduct += calcLateDeduction(l.late_minutes || 0, rateTag, hourlyRate);
         late_deduct += parseFloat(l.hr_extra_deduct || 0);
@@ -258,6 +285,18 @@ export default function WeeklySummaryPage({ role }) {
   };
 
   const selSummary = selectedCycle ? calcCycleSummary(selectedCycle.date_from, selectedCycle.date_to) : [];
+
+  // 🔧 v3 [#9] กระทบยอดทั้งเดือน: รวม subtotal เสาร์ทุกรอบต่อคน → คงเหลือสิ้นเดือน = สุทธิ − Σเสาร์
+  const cycleSummaries = cycles.map(c => calcCycleSummary(c.date_from, c.date_to));
+  const reconRows = employees.map(emp => {
+    let satSum = 0;
+    cycleSummaries.forEach(arr => {
+      const r = arr.find(x => x.emp.id === emp.id);
+      if (r) satSum += r.subtotal;
+    });
+    const net = Math.round(netByEmp[emp.id] || 0);
+    return { emp, net, satSum, monthEnd: net - satSum };
+  }).filter(r => r.net !== 0 || r.satSum !== 0);
 
   return (
     <div style={s.page}>
@@ -443,6 +482,53 @@ export default function WeeklySummaryPage({ role }) {
             </div>
           );
         })}
+      </div>
+
+      {/* 🧮 v3 [#9] กระทบยอดทั้งเดือน: Σเสาร์ + คงเหลือสิ้นเดือน = สุทธิทั้งเดือน */}
+      <div style={s.card}>
+        <p style={{margin:"0 0 4px",fontWeight:700,fontSize:15}}>
+          🧮 กระทบยอดทั้งเดือน — {MONTHS_TH[month]} {yearBE}
+        </p>
+        <p style={{margin:"0 0 12px",fontSize:12,color:"#64748b"}}>
+          คงเหลือสิ้นเดือน = สุทธิทั้งเดือน − เสาร์ที่จ่ายแล้ว → "จ่ายเสาร์รวม + คงเหลือสิ้นเดือน" ต้อง = สุทธิทั้งเดือน เสมอ
+        </p>
+        {cycles.length === 0 ? (
+          <p style={{color:"#9ca3af",textAlign:"center",padding:16}}>
+            ยังไม่มีรอบเสาร์ — สร้างรอบก่อนถึงจะกระทบยอดได้
+          </p>
+        ) : (
+          <div style={{overflowX:"auto"}}>
+            <table style={s.table}>
+              <thead><tr>
+                {["ชื่อ","สุทธิทั้งเดือน","จ่ายเสาร์รวม","คงเหลือสิ้นเดือน"].map(h=>(
+                  <th key={h} style={s.th}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {reconRows.map(r=>(
+                  <tr key={r.emp.id}>
+                    <td style={{...s.td,fontWeight:600}}>{r.emp.nickname}</td>
+                    <td style={{...s.td,textAlign:"right"}}>{fmtI(r.net)}</td>
+                    <td style={{...s.td,textAlign:"right",color:"#0f766e"}}>{fmtI(r.satSum)}</td>
+                    <td style={{...s.td,textAlign:"right",fontWeight:700,
+                      color:r.monthEnd<0?"#dc2626":"#1e40af"}}>{fmtI(r.monthEnd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{background:"#f0f4f8",fontWeight:700}}>
+                  <td style={s.td}>รวม</td>
+                  <td style={{...s.td,textAlign:"right"}}>{fmtI(reconRows.reduce((a,r)=>a+r.net,0))}</td>
+                  <td style={{...s.td,textAlign:"right"}}>{fmtI(reconRows.reduce((a,r)=>a+r.satSum,0))}</td>
+                  <td style={{...s.td,textAlign:"right",color:"#1e40af"}}>{fmtI(reconRows.reduce((a,r)=>a+r.monthEnd,0))}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p style={{margin:"8px 0 0",fontSize:12,color:"#64748b"}}>
+              ⚠️ ถ้า "คงเหลือสิ้นเดือน" ติดลบ (แดง) = จ่ายเสาร์เกินสุทธิทั้งเดือน — ควรเช็คสาย/เบิก/รอบซ้ำ
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
