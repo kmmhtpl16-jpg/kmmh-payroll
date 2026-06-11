@@ -122,7 +122,7 @@ export default function WeeklySummaryPage({ role }) {
 
       const { data: logData } = await supabase
         .from("attendance_logs")
-        .select("employee_id,work_date,late_minutes,ot_hours,hr_extra_deduct,needs_hr_review,scan_am_in,scan_pm_out")
+        .select("employee_id,work_date,late_minutes,ot_hours,hr_extra_deduct,needs_hr_review,scan_am_in,scan_pm_out,hr_note")
         .gte("work_date", dateFrom).lte("work_date", dateTo);
       setLogs(logData || []);
 
@@ -176,7 +176,7 @@ export default function WeeklySummaryPage({ role }) {
         return l.employee_id === emp.id && d >= from && d <= to;
       });
       // 🔧 v3 [#9] ข้ามวันอาทิตย์ให้ตรง payrollCalc (อาทิตย์จ่ายเป็นค่าอาทิตย์ตอนสิ้นเดือน)
-      const workLogs = empLogs.filter(l => !isSunday(l.work_date));
+      const workLogs = empLogs.filter(l => !isSunday(l.work_date) && !(l.hr_note && /ขาด/.test(l.hr_note))); // 🆕 ขาดงาน ไม่นับวันทำ
       const work_days = workLogs.filter(l => !l.needs_hr_review).length;
       const late_minutes = workLogs.reduce((s,l) => s + (l.late_minutes||0), 0);
       const ot_hours = workLogs.reduce((s,l) => s + (l.ot_hours||0), 0);

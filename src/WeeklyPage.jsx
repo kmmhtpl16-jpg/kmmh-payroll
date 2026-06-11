@@ -139,7 +139,7 @@ export default function WeeklyPage({ role }) {
       const dateTo   = `${year}-${monthStr}-${String(dim).padStart(2,"0")}`;
 
       const { data: logs } = await supabase
-        .from("attendance_logs").select("employee_id, work_date")
+        .from("attendance_logs").select("employee_id, work_date, hr_note")
         .in("employee_id", empIds).gte("work_date", dateFrom).lte("work_date", dateTo);
       setAllLogs(logs || []);
 
@@ -182,7 +182,8 @@ export default function WeeklyPage({ role }) {
     const f = toLocalDateStr(cycle.dateFrom), t = toLocalDateStr(cycle.dateTo);
     return allLogs.filter(l =>
       l.employee_id === empId && l.work_date >= f && l.work_date <= t &&
-      new Date(l.work_date + "T00:00:00").getDay() !== 0
+      new Date(l.work_date + "T00:00:00").getDay() !== 0 &&
+      !(l.hr_note && /ขาด/.test(l.hr_note))   // 🆕 ขาดงาน ไม่นับวันทำ/ไม่จ่าย
     );
   }
 

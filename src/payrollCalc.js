@@ -268,6 +268,9 @@ export async function calcPayroll(year, month) {
 
       if (isSunday(log.work_date)) continue;
 
+      // 🆕 ขาดงาน → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
+      if (log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
+
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
