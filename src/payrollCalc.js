@@ -289,12 +289,7 @@ export async function calcPayroll(year, month) {
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // 🆕 ลาครึ่งวัน → มาทำงานครึ่งวัน base_wage บวกเต็มวันไปแล้ว
-      //   จึงหักคืนครึ่งวัน (dayRate / 2) เป็น leave_deduct → จ่ายจริงครึ่งวัน
-      if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) {
-        leave_deduct += dayRate / 2;
-        leave_days   += 0.5;
-      }
+      // 🆕 ลาป่วย/ลากิจครึ่งวัน = จ่ายเต็มวัน (ครึ่งที่ลาใช้สิทธิ์) → ไม่หักค่าแรงครึ่งวันแล้ว
 
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
