@@ -1,29 +1,28 @@
 // src/supabaseAttendance.js
 import { supabase } from "./supabaseClient";
 
-// 🔧 v2 [import guard] หาแถวที่ "สำคัญ" ซึ่งการ import จะไปทับ:
-//   (1) log เดิมที่ HR แก้มือ/ยืนยันแล้ว (is_confirmed = true)
-//   (2) วันที่อยู่ในรอบจ่าย (pay_cycles) ที่ "จ่ายแล้ว" (is_paid = true)
-//   คืน Map key `${employee_id}_${work_date}` → เหตุผล (ใช้เตือน + ใช้ skip ถ้าผู้ใช้เลือกไม่ทับ)
-async function findProtectedKeys(rows, dateFrom, dateTo) {
-  const protectedMap = new Map();
+// 🔧 v3 [import guard] หาแถวที่ "สำคัญ" ซึ่งการ import จะไปทับ + คืนรายละเอียด เดิม→ใหม่
+//   สำคัญ = (1) log เดิมที่ HR แก้มือ/ยืนยันแล้ว (is_confirmed=true)
+//          (2) วันที่อยู่ในรอบจ่าย (pay_cycles) ที่ "จ่ายแล้ว" (is_paid=true)
+//   คืน array ของ conflict (ไว้โชว์ใน modal เทียบ เดิม→ใหม่ + ใช้ skip ถ้าผู้ใช้เลือกไม่ทับ)
+//   วันปกติที่ไม่เข้าเงื่อนไข = ไม่อยู่ในลิสต์ → ทับเงียบตามเดิม
+export async function findProtectedConflicts(rows, dateFrom, dateTo) {
   const empIds = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
-  if (empIds.length === 0) return protectedMap;
+  if (empIds.length === 0) return [];
 
-  // (1) log เดิมที่ HR ยืนยัน/แก้มือแล้ว → ห้ามทับเงียบ
+  // log เดิม (ไว้เทียบค่าเดิม + เช็ค is_confirmed)
   const { data: existing } = await supabase
     .from("attendance_logs")
-    .select("employee_id, work_date, is_confirmed")
+    .select("employee_id, work_date, is_confirmed, late_minutes, ot_hours, scan_am_in")
     .in("employee_id", empIds)
     .gte("work_date", dateFrom)
     .lte("work_date", dateTo);
+  const existMap = {};
   (existing || []).forEach((e) => {
-    if (e.is_confirmed) {
-      protectedMap.set(`${e.employee_id}_${e.work_date}`, "HR แก้มือ/ยืนยันแล้ว");
-    }
+    existMap[`${e.employee_id}_${e.work_date}`] = e;
   });
 
-  // (2) วันที่อยู่ในรอบที่ "จ่ายแล้ว" → กระทบยอดที่จ่ายไปแล้ว
+  // รอบที่ "จ่ายแล้ว" (ช่วงวันที่)
   const { data: paidCycles } = await supabase
     .from("pay_cycles")
     .select("date_from, date_to, is_paid")
@@ -32,14 +31,31 @@ async function findProtectedKeys(rows, dateFrom, dateTo) {
     .gte("date_to", dateFrom);
   const inPaidCycle = (d) =>
     (paidCycles || []).some((c) => d >= c.date_from && d <= c.date_to);
+
+  const conflicts = [];
   rows.forEach((r) => {
-    if (r.employee_id && inPaidCycle(r.work_date)) {
-      const k = `${r.employee_id}_${r.work_date}`;
-      if (!protectedMap.has(k)) protectedMap.set(k, "อยู่ในรอบที่จ่ายแล้ว");
-    }
+    if (!r.employee_id) return;
+    const key = `${r.employee_id}_${r.work_date}`;
+    const old = existMap[key];
+    const reasons = [];
+    if (old?.is_confirmed) reasons.push("HR แก้มือ/ยืนยันแล้ว");
+    if (inPaidCycle(r.work_date)) reasons.push("อยู่ในรอบที่จ่ายแล้ว");
+    if (reasons.length === 0) return; // วันปกติ → ทับเงียบ ไม่ต้องเตือน
+
+    conflicts.push({
+      key,
+      employee_id: r.employee_id,
+      work_date: r.work_date,
+      nickname: r.nickname || r.emp_code || r.employee_id,
+      reason: reasons.join(" + "),
+      old: old
+        ? { am_in: old.scan_am_in || "—", late: old.late_minutes || 0, ot: old.ot_hours || 0 }
+        : { am_in: "—", late: "—", ot: "—" },
+      neu: { am_in: r.scan_am_in || "—", late: r.late_minutes || 0, ot: r.ot_hours || 0 },
+    });
   });
 
-  return protectedMap;
+  return conflicts;
 }
 
 export async function saveAttendanceToSupabase(
@@ -47,29 +63,11 @@ export async function saveAttendanceToSupabase(
   fileName,
   dateFrom,
   dateTo,
-  role = "hr"
+  role = "hr",
+  skipKeys = new Set()
 ) {
   if (!rows || rows.length === 0) {
     throw new Error("ไม่มีข้อมูลที่จะบันทึก");
-  }
-
-  // 🔧 v2 [import guard] เตือนก่อนทับข้อมูลสำคัญ (HR แก้มือ / วันในรอบที่จ่ายแล้ว)
-  //   เตือนเฉพาะแถวสำคัญ — วันปกติทับเงียบตามเดิม
-  const protectedMap = await findProtectedKeys(rows, dateFrom, dateTo);
-  let skipKeys = new Set();
-  if (protectedMap.size > 0) {
-    const items = [...protectedMap.entries()];
-    const sample = items
-      .slice(0, 6)
-      .map(([k, reason]) => `• ${k.split("_").slice(-1)[0]} (${reason})`)
-      .join("\n");
-    const more = items.length > 6 ? `\n…และอีก ${items.length - 6} รายการ` : "";
-    const overwrite = window.confirm(
-      `⚠️ การนำเข้านี้จะทับข้อมูลสำคัญ ${items.length} รายการ:\n${sample}${more}\n\n` +
-        `กด "ตกลง" = ทับทั้งหมด (ใช้ข้อมูลใหม่)\n` +
-        `กด "ยกเลิก" = เก็บของเดิมไว้ (ข้ามเฉพาะรายการสำคัญพวกนี้ ส่วนวันอื่นยังนำเข้าปกติ)`
-    );
-    if (!overwrite) skipKeys = new Set(protectedMap.keys());
   }
 
   // ── Step 1: สร้าง import record ───────────────────────────
@@ -91,7 +89,7 @@ export async function saveAttendanceToSupabase(
 
   const importId = importData.id;
 
-  // ── Step 2: UPSERT attendance_logs (ข้ามรายการสำคัญถ้าผู้ใช้เลือกไม่ทับ) ──
+  // ── Step 2: UPSERT attendance_logs (ข้ามรายการสำคัญที่ผู้ใช้เลือกไม่ทับ) ──
   const logsToUpsert = rows
     .filter((r) => !skipKeys.has(`${r.employee_id}_${r.work_date}`))
     .map((r) => ({
@@ -128,11 +126,11 @@ export async function saveAttendanceToSupabase(
     savedCount = logData?.length || 0;
   }
 
-  const skippedCount = skipKeys.size;
+  const skippedCount = rows.length - logsToUpsert.length;
   const errorCount = logsToUpsert.filter((r) => r.needs_hr_review).length;
 
   let message = `บันทึกแล้ว ${savedCount} รายการ`;
-  if (skippedCount > 0) message += ` · ข้ามของเดิมที่ปกป้องไว้ ${skippedCount} รายการ`;
+  if (skippedCount > 0) message += ` · เก็บของเดิมไว้ ${skippedCount} รายการ`;
   if (errorCount > 0) message += ` · ⚠️ ${errorCount} รายการต้องตรวจ`;
   if (errorCount === 0 && skippedCount === 0) message += " ✅";
 

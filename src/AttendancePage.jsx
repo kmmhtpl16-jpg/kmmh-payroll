@@ -1,19 +1,20 @@
 // src/AttendancePage.jsx
 import { useState, useEffect } from "react";
 import { parseZKTecoCSV, calcDay } from "./attendanceLogic";
-import { saveAttendanceToSupabase, loadRecentImports, deleteImport } from "./supabaseAttendance";
+import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtectedConflicts } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
+import ImportConflictModal from "./ImportConflictModal";
 
 // ── ปุ่ม preset หมายเหตุ HR ──
-// fullDay: true  = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
+// fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
 // fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
 const HR_NOTE_PRESETS = [
-  { label: "ลาป่วย",         value: "ลาป่วย",         fullDay: true  },
-  { label: "ลากิจ",          value: "ลากิจ",          fullDay: true  },
-  { label: "ลาครึ่งวัน",     value: "ลาครึ่งวัน",     fullDay: false },
-  { label: "ออกระหว่างวัน",  value: "ออกระหว่างวัน",  fullDay: false },
-  { label: "ขาดงาน",         value: "ขาดงาน",         fullDay: true  },
-  { label: "วันหยุด",        value: "วันหยุดบริษัท",   fullDay: true  },
+  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true },
+  { label: "ลากิจ", value: "ลากิจ", fullDay: true },
+  { label: "ลาครึ่งวัน", value: "ลาครึ่งวัน", fullDay: false },
+  { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false },
+  { label: "ขาดงาน", value: "ขาดงาน", fullDay: true },
+  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true },
 ];
 
 function processAttendance(rows, employees) {
@@ -26,19 +27,19 @@ function processAttendance(rows, employees) {
       date: r.date,
     });
     return {
-      employee_id:     emp?.id || null,
-      emp_code:        r.empCode,
-      nickname:        emp?.nickname || r.empCode,
-      work_date:       r.date,
-      scan_am_in:      r.checkIn   || null,
-      scan_am_out:     r.lunchOut  || null,
-      scan_pm_in:      r.lunchIn   || null,
-      scan_pm_out:     r.checkOut  || null,
-      late_minutes:    lateMin,
-      ot_hours:        otHours,
-      lunch_ot:        false,
+      employee_id: emp?.id || null,
+      emp_code: r.empCode,
+      nickname: emp?.nickname || r.empCode,
+      work_date: r.date,
+      scan_am_in: r.checkIn || null,
+      scan_am_out: r.lunchOut || null,
+      scan_pm_in: r.lunchIn || null,
+      scan_pm_out: r.checkOut || null,
+      late_minutes: lateMin,
+      ot_hours: otHours,
+      lunch_ot: false,
       needs_hr_review: r.needsReview || !emp,
-      hr_note:         !emp ? `ไม่พบพนักงาน emp_code=${r.empCode}` : (r.reason || null),
+      hr_note: !emp ? `ไม่พบพนักงาน emp_code=${r.empCode}` : (r.reason || null),
     };
   });
 }
@@ -56,21 +57,22 @@ function to24h(val) {
 }
 
 export default function AttendancePage({ role }) {
-  const [processed,      setProcessed]      = useState([]);
-  const [employees,      setEmployees]      = useState([]);
-  const [fileName,       setFileName]       = useState("");
-  const [saving,         setSaving]         = useState(false);
-  const [saveResult,     setSaveResult]     = useState(null);
-  const [imports,        setImports]        = useState([]);
+  const [processed, setProcessed] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [fileName, setFileName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState(null);
+  const [imports, setImports] = useState([]);
   const [loadingImports, setLoadingImports] = useState(false);
-  const [activeSection,  setActiveSection]  = useState("upload");
+  const [activeSection, setActiveSection] = useState("upload");
+  const [conflictRows, setConflictRows] = useState(null); // 🔧 v3 [import guard] modal เตือนทับ
 
-  const [reviewLogs,    setReviewLogs]    = useState([]);
+  const [reviewLogs, setReviewLogs] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
-  const [editRow,       setEditRow]       = useState(null);
-  const [editValues,    setEditValues]    = useState({});
-  const [savingEdit,    setSavingEdit]    = useState(false);
-  const [editMsg,       setEditMsg]       = useState(null);
+  const [editRow, setEditRow] = useState(null);
+  const [editValues, setEditValues] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editMsg, setEditMsg] = useState(null);
 
   useEffect(() => { loadEmployees(); loadHistory(); }, []);
 
@@ -104,13 +106,13 @@ export default function AttendancePage({ role }) {
   const openEdit = (log) => {
     setEditRow(log);
     setEditValues({
-      scan_am_in:       log.scan_am_in       || "",
-      scan_am_out:      log.scan_am_out      || "",
-      scan_pm_in:       log.scan_pm_in       || "",
-      scan_pm_out:      log.scan_pm_out      || "",
-      hr_note:          log.hr_note          || "",
-      hr_extra_deduct:  log.hr_extra_deduct  != null ? String(log.hr_extra_deduct) : "",
-      hr_extra_note:    log.hr_extra_note    || "",
+      scan_am_in: log.scan_am_in || "",
+      scan_am_out: log.scan_am_out || "",
+      scan_pm_in: log.scan_pm_in || "",
+      scan_pm_out: log.scan_pm_out || "",
+      hr_note: log.hr_note || "",
+      hr_extra_deduct: log.hr_extra_deduct != null ? String(log.hr_extra_deduct) : "",
+      hr_extra_note: log.hr_extra_note || "",
     });
     setEditMsg(null);
   };
@@ -120,46 +122,46 @@ export default function AttendancePage({ role }) {
     setSavingEdit(true);
     setEditMsg(null);
 
-    const am_in  = to24h(editValues.scan_am_in);
+    const am_in = to24h(editValues.scan_am_in);
     const am_out = to24h(editValues.scan_am_out);
-    const pm_in  = to24h(editValues.scan_pm_in);
+    const pm_in = to24h(editValues.scan_pm_in);
     const pm_out = to24h(editValues.scan_pm_out);
 
     const emp = employees.find(e => e.id === editRow.employee_id);
     // 🆕 ส่ง date (work_date ของแถวนี้) เข้าไป → กฎเสาร์ทำงานตอนกดแก้ด้วย
     const { lateMin, otHours } = calcDay({
-      checkIn:  am_in  || null,
+      checkIn: am_in || null,
       lunchOut: am_out || null,
-      lunchIn:  pm_in  || null,
+      lunchIn: pm_in || null,
       checkOut: pm_out || null,
-      empCode:  emp?.emp_code || "",
-      date:     editRow.work_date,
+      empCode: emp?.emp_code || "",
+      date: editRow.work_date,
     });
 
     // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
-    const fullDayNote      = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
+    const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
     const isFullDayAbsence = !!fullDayNote;
 
     const allFilled = (am_in !== "" && am_out !== "" && pm_in !== "" && pm_out !== "");
-    // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด  หรือ  เป็นลา/ขาดทั้งวัน
-    const isDone    = allFilled || isFullDayAbsence;
+    // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด หรือ เป็นลา/ขาดทั้งวัน
+    const isDone = allFilled || isFullDayAbsence;
 
     const { error } = await supabase
       .from("attendance_logs")
       .update({
         // ลา/ขาดทั้งวัน = ไม่มาทำงาน → ล้างเวลา + สาย/OT เป็น 0
-        scan_am_in:      isFullDayAbsence ? null : (am_in  || null),
-        scan_am_out:     isFullDayAbsence ? null : (am_out || null),
-        scan_pm_in:      isFullDayAbsence ? null : (pm_in  || null),
-        scan_pm_out:     isFullDayAbsence ? null : (pm_out || null),
-        late_minutes:    isFullDayAbsence ? 0 : lateMin,
-        ot_hours:        isFullDayAbsence ? 0 : otHours,
-        hr_note:          editValues.hr_note || null,
-        hr_extra_deduct:  parseFloat(editValues.hr_extra_deduct) || 0,
-        hr_extra_note:    editValues.hr_extra_note || null,
-        needs_hr_review:  isDone ? false : true,
-        is_confirmed:    isDone ? true  : false,
-        updated_at:      new Date().toISOString(),
+        scan_am_in: isFullDayAbsence ? null : (am_in || null),
+        scan_am_out: isFullDayAbsence ? null : (am_out || null),
+        scan_pm_in: isFullDayAbsence ? null : (pm_in || null),
+        scan_pm_out: isFullDayAbsence ? null : (pm_out || null),
+        late_minutes: isFullDayAbsence ? 0 : lateMin,
+        ot_hours: isFullDayAbsence ? 0 : otHours,
+        hr_note: editValues.hr_note || null,
+        hr_extra_deduct: parseFloat(editValues.hr_extra_deduct) || 0,
+        hr_extra_note: editValues.hr_extra_note || null,
+        needs_hr_review: isDone ? false : true,
+        is_confirmed: isDone ? true : false,
+        updated_at: new Date().toISOString(),
       })
       .eq("id", editRow.id);
 
@@ -186,9 +188,10 @@ export default function AttendancePage({ role }) {
     setProcessed(processAttendance(rows, employees));
   };
 
-  const okCount     = processed.filter(r => !r.needs_hr_review).length;
-  const reviewCount = processed.filter(r =>  r.needs_hr_review).length;
+  const okCount = processed.filter(r => !r.needs_hr_review).length;
+  const reviewCount = processed.filter(r => r.needs_hr_review).length;
 
+  // 🔧 v3 [import guard] กดบันทึก → เช็คก่อนว่าจะทับข้อมูลสำคัญไหม ถ้าใช่เปิด modal
   const handleSave = async () => {
     if (processed.length === 0) return;
     if (reviewCount > 0) {
@@ -197,11 +200,29 @@ export default function AttendancePage({ role }) {
       );
       if (!ok) return;
     }
+    const dates = processed.map(r => r.work_date).sort();
+    const df = dates[0], dt = dates[dates.length - 1];
+    try {
+      const conflicts = await findProtectedConflicts(processed, df, dt);
+      if (conflicts.length > 0) {
+        setConflictRows(conflicts); // เปิด modal ให้ผู้ใช้เลือก ทับ/เก็บของเดิม
+        return;
+      }
+    } catch (e) {
+      // เช็คไม่ได้ก็ไม่บล็อก — บันทึกตามปกติ
+      console.error(e);
+    }
+    doSave(new Set());
+  };
+
+  // ทำการบันทึกจริง (skipKeys = รายการสำคัญที่เลือก "เก็บของเดิม")
+  const doSave = async (skipKeys) => {
+    setConflictRows(null);
     setSaving(true); setSaveResult(null);
     try {
-      const dates  = processed.map(r => r.work_date).sort();
+      const dates = processed.map(r => r.work_date).sort();
       const result = await saveAttendanceToSupabase(
-        processed, fileName, dates[0], dates[dates.length-1], role
+        processed, fileName, dates[0], dates[dates.length-1], role, skipKeys
       );
       setSaveResult({ ...result, success: true });
       setProcessed([]); setFileName("");
@@ -218,8 +239,8 @@ export default function AttendancePage({ role }) {
   };
 
   const SECTIONS = [
-    { id: "upload",  label: "📤 อัพโหลด CSV" },
-    { id: "review",  label: "🟡 แก้ไขย้อนหลัง" },
+    { id: "upload", label: "📤 อัพโหลด CSV" },
+    { id: "review", label: "🟡 แก้ไขย้อนหลัง" },
     { id: "history", label: "📁 คลังไฟล์" },
   ];
 
@@ -278,9 +299,9 @@ export default function AttendancePage({ role }) {
                       <tr key={i} style={{ background: r.needs_hr_review?"#fffbeb":"#f0fdf4" }}>
                         <td style={s.td}>{r.nickname}</td>
                         <td style={s.td}>{r.work_date}</td>
-                        <td style={s.td}>{r.scan_am_in  || "—"}</td>
+                        <td style={s.td}>{r.scan_am_in || "—"}</td>
                         <td style={s.td}>{r.scan_am_out || "—"}</td>
-                        <td style={s.td}>{r.scan_pm_in  || "—"}</td>
+                        <td style={s.td}>{r.scan_pm_in || "—"}</td>
                         <td style={s.td}>{r.scan_pm_out || "—"}</td>
                         <td style={{ ...s.td, color: r.late_minutes>0?"#dc2626":"inherit", fontWeight: r.late_minutes>0?700:400 }}>
                           {r.late_minutes||0}
@@ -402,9 +423,9 @@ export default function AttendancePage({ role }) {
 
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
                 {[
-                  ["scan_am_in",  "🕐 เข้าเช้า"],
+                  ["scan_am_in", "🕐 เข้าเช้า"],
                   ["scan_am_out", "🍱 พักออก"],
-                  ["scan_pm_in",  "🍱 พักกลับ"],
+                  ["scan_pm_in", "🍱 พักกลับ"],
                   ["scan_pm_out", "🕔 ออกเย็น"],
                 ].map(([key, label]) => (
                   <div key={key}>
@@ -527,6 +548,15 @@ export default function AttendancePage({ role }) {
           </div>
         </div>
       )}
+
+      {/* ══ MODAL เตือนทับข้อมูลสำคัญ (import guard) ══ */}
+      <ImportConflictModal
+        rows={conflictRows}
+        saving={saving}
+        onOverwrite={() => doSave(new Set())}
+        onKeep={() => doSave(new Set((conflictRows || []).map(c => c.key)))}
+        onCancel={() => setConflictRows(null)}
+      />
     </div>
   );
 }
