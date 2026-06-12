@@ -97,9 +97,9 @@ export default function AttendancePage({ role }) {
     const { data, error } = await supabase
       .from("attendance_logs")
       .select("*, employees(nickname, emp_code)")
-      .or("needs_hr_review.eq.true,hr_edited_at.not.is.null")
+      .gte("work_date", "2000-01-01")
       .order("work_date", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (!error) setReviewLogs(data || []);
     setLoadingReview(false);
   };
@@ -381,7 +381,7 @@ export default function AttendancePage({ role }) {
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <div>
-              <h3 style={{ margin:0, fontSize:15 }}>🟡 รายการที่ต้องตรวจและแก้ไข</h3>
+              <h3 style={{ margin:0, fontSize:15 }}>📋 รายการเวลาทั้งหมด (แก้ไขย้อนหลังได้)</h3>
               <p style={{ margin:"4px 0 0", fontSize:12, color:"#64748b" }}>
                 กรอกเวลาให้ครบ 4 จุด → ระบบคำนวณสาย/OT ใหม่อัตโนมัติ + ปลด 🟡
               </p>
@@ -395,7 +395,7 @@ export default function AttendancePage({ role }) {
           )}
 
           {reviewLogs.map(log => { const locked = !log.needs_hr_review && !!log.hr_edited_at; return (
-            <div key={log.id} style={{ ...s.reviewCard, ...(locked ? s.reviewCardLocked : {}) }}>
+            <div key={log.id} style={{ ...s.reviewCard, ...(locked ? s.reviewCardLocked : (log.needs_hr_review ? {} : s.reviewCardClean)) }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                 <div>
                   <span style={{ fontWeight:700, fontSize:14 }}>{log.employees?.nickname || log.employee_id}</span>
@@ -638,7 +638,7 @@ const s = {
     border:"1.5px solid #fde68a", background:"#fffbeb", marginBottom:8 },
   editBtn: { padding:"6px 14px", borderRadius:8, border:"1.5px solid #e2e8f0",
     background:"#fff", cursor:"pointer", fontWeight:600, fontSize:13 },
-  reviewCardLocked: { border:"1.5px solid #bbf7d0", background:"#f0fdf4" },
+  reviewCardLocked: { border:"1.5px solid #bbf7d0", background:"#f0fdf4" }, reviewCardClean: { border:"1.5px solid #e2e8f0", background:"#fff" },
   lockedTag: { padding:"6px 12px", borderRadius:8, background:"#dcfce7",
     color:"#166534", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
   importCard: { display:"flex", alignItems:"flex-start", gap:12,
