@@ -15,7 +15,7 @@ const HR_NOTE_PRESETS = [
   { label: "ลากิจครึ่งวัน", value: "ลากิจครึ่งวัน", fullDay: false, leaveType: "personal", half: true },
   { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false },
   { label: "ขาดงาน", value: "ขาดงาน", fullDay: true },
-  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true },
+  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true }, { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false },
 ];
 
 function processAttendance(rows, employees) {
