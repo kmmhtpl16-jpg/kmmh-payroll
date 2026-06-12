@@ -314,7 +314,7 @@ export default function LeavePage({ role }) {
     loadRecords(selectedEmp);
   };
 
-  const typeColor = (t) => LEAVE_TYPES.find(x => x.value === t)?.color || C.muted;
+  const typeColor = (t) => LEAVE_TYPES.find(x => x.value === t)?.color || C.muted; async function uploadReceipt(rec, file){ if(!file) return; try{ const comp=await compressImage(file); const path=`leave/${rec.employee_id}/${rec.leave_date}_${rec.leave_type}_${Date.now()}.jpg`; const up=await supabase.storage.from("receipts").upload(path, comp, { upsert:false }); if(up.error) throw new Error(up.error.message); const pub=supabase.storage.from("receipts").getPublicUrl(path); const upd=await supabase.from("leave_requests").update({ receipt_url:pub.data.publicUrl, receipt_size_kb:kbSize(comp) }).eq("id", rec.id); if(upd.error) throw new Error(upd.error.message); loadRecords(selectedEmp); }catch(e){ alert("อัปโหลดรูปไม่สำเร็จ: "+e.message); } }
   const typeBg    = (t) => LEAVE_TYPES.find(x => x.value === t)?.bg    || "#f9fafb";
   const typeLabel = (t) => LEAVE_TYPES.find(x => x.value === t)?.label || t;
 
@@ -617,11 +617,11 @@ export default function LeavePage({ role }) {
                       {r.note}
                     </p>
                   )}
-                  {r.receipt_url && (
+                  {r.receipt_url ? (
                     <a href={r.receipt_url} target="_blank" rel="noreferrer"
                       style={{ fontSize:12, color:C.personal, textDecoration:"underline" }}>
                       📎 ดูเอกสาร
-                    </a>
+                    </a>) : (r.leave_type !== "absent" && (<label style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:12, color:C.personal, cursor:"pointer", textDecoration:"underline" }}>📎 แนบรูปใบลา<input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadReceipt(r, e.target.files[0])} /></label>)
                   )}
                 </div>
                 {role === "owner" && (
