@@ -146,7 +146,7 @@ export default function AdvanceSummaryCard() {
         <button onClick={() => setOpen((v) => !v)} style={st.collapseBtn} title={open ? "ย่อ" : "ขยาย"}>
           {open ? "▾" : "▸"}
         </button>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 150 }}>
           <div style={st.title}>💵 เบิกได้อีกเท่าไหร่</div>
           <div style={st.subtitle}>ค่าแรงที่ลงงานแล้ว − เบิกที่เอาไปแล้ว · อัปเดตตามวันนี้</div>
         </div>
@@ -261,7 +261,7 @@ const st = {
     alignItems: "center",
     gap: 10,
     padding: "12px 16px",
-    background: "#ecfdf5",
+    background: "#ecfdf5", flexWrap: "wrap",
     borderBottom: "1px solid #d1fae5",
   },
   collapseBtn: {
