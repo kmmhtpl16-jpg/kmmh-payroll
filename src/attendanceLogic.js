@@ -29,7 +29,7 @@ export const RULES = {
   // ── 🆕 วันเสาร์ ──
   //   เสาร์ทำครึ่งวัน มีแค่สแกนเข้าเช้าจุดเดียว
   //   • สายเช้า → หักปกติ (1 บ/นาที)
-  //   • เที่ยง + เลิกงาน → ไม่นับสาย / ไม่หัก (ข้ามทั้งหมด)
+  // • เติมเที่ยง/เย็นทีหลังได้ → คิดสาย/OT บ่ายเหมือนวันธรรมดา หักสิ้นเดือน (เงินเสาร์จ่ายเช้าไปก่อน)
   //   • ค่าแรง → จ่ายเต็มวันเสมอ (จัดการในฝั่ง payrollCalc)
   SATURDAY_MORNING_OT: true,   // วันเสาร์ให้ OT เข้าก่อนเวลา (เข้าก่อน 07:00 ได้ OT) — OT จ่ายสิ้นเดือน
 };
@@ -115,11 +115,7 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date })
     }
   }
 
-  // ── 🆕 วันเสาร์: หยุดแค่นี้ — คิดเฉพาะสายเช้า ไม่แตะเที่ยง/เย็น ──
-  if (isSat) {
-    if (ci !== null) breakdown.push({ type: "info", label: "วันเสาร์ — คิดเฉพาะสายเช้า" });
-    return { lateMin, otHours, breakdown };
-  }
+  // 🆕 วันเสาร์: ไม่ตัดจบที่นี่แล้ว — falls through ไปคิดสาย/OT เที่ยง+เย็น เหมือนวันธรรมดา (สายบ่ายหักสิ้นเดือน)
 
   // ── พักเที่ยง ── (วันธรรมดา, ต้องมีทั้งออกและกลับ)
   if (lo !== null && li !== null) {
@@ -190,23 +186,16 @@ function parseDate(s) {
 function assignPunches(ins, outs, isSat = false) {
   const all = [...ins, ...outs];
 
-  // ── 🆕 วันเสาร์: ครึ่งวัน มีแค่เข้าเช้า ──
+  // 🆕 วันเสาร์: เติมเที่ยง/เย็นทีหลังได้ → ครบ 4 จุดคิดสาย/OT เหมือนวันธรรมดา (สายบ่ายหักสิ้นเดือน)
   if (isSat) {
-    if (all.length === 0) {
-      return {
-        checkIn: null, lunchOut: null, lunchIn: null, checkOut: null,
-        needsReview: true,
-        reason: "วันเสาร์ — ไม่สแกนเลย (ขาด/ลา?)",
-      };
+    if (ins.length === 2 && outs.length === 2) {
+      return { checkIn: ins[0], lunchOut: outs[0], lunchIn: ins[1], checkOut: outs[1], needsReview: false, reason: "" };
     }
-    // เลือกเวลาน้อยสุด = เข้าเช้า ที่เหลือทิ้ง (เสาร์ไม่คิดเที่ยง/เย็น)
-    const sorted = [...new Set(all)].sort();
-    return {
-      checkIn:  sorted[0],
-      lunchOut: null, lunchIn: null, checkOut: null,
-      needsReview: false,
-      reason: "",
-    };
+    if (all.length > 0) {
+      const satMorning = [...new Set(all)].sort();
+      return { checkIn: satMorning[0], lunchOut: null, lunchIn: null, checkOut: null, needsReview: false, reason: "เสาร์ — รอเติมเที่ยง/เย็น" };
+    }
+    return { checkIn: null, lunchOut: null, lunchIn: null, checkOut: null, needsReview: true, reason: "วันเสาร์ — ไม่สแกนเลย (ขาด/ลา?)" };
   }
 
   // ── เคสปกติ: ins=2, outs=2 ──
