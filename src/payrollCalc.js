@@ -282,7 +282,7 @@ export async function calcPayroll(year, month) {
 
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
-      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || (emp.probation ? 5 : 1);
+      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || ((emp.probation && !/แจ้งล่วงหน้า/.test(log.hr_note||'')) ? 5 : 1);
       late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
       ot_hours += parseFloat(log.ot_hours || 0);
