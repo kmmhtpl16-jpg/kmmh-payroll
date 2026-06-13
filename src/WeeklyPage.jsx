@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
-import AdvanceSummaryCard from "./AdvanceSummaryCard";
+import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { calcLateDeduction } from "./payrollCalc";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
@@ -84,13 +84,13 @@ function buildCyclesFromCalendar(year, month, logDates) {
   return cycles;
 }
 
-function calcCycleWageForEmployee(record, logsInCycle) {
+function calcCycleWageForEmployee(record, logsInCycle, WTAG) {
   const workDays = logsInCycle.filter(
     l => new Date(l.work_date + "T00:00:00").getDay() !== 0
   ).length;
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
   const dailyRate = record.base_wage / record.work_days;
-  const wage = parseFloat((dailyRate * workDays).toFixed(2));
+  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; logsInCycle.filter(l => new Date(l.work_date + "T00:00:00").getDay() !== 0).forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = parseFloat((dailyRate * workDays - _lateDed).toFixed(2));
   return { workDays, wage };
 }
 
@@ -126,7 +126,7 @@ export default function WeeklyPage({ role }) {
 
       const { data: pr } = await supabase
         .from("payroll_records")
-        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule)")
+        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation)")
         .eq("period_id", per.id);
       const sorted = sortByEmpCode(pr || []);
       setPayrolls(sorted);
@@ -139,9 +139,9 @@ export default function WeeklyPage({ role }) {
       const dateTo   = `${year}-${monthStr}-${String(dim).padStart(2,"0")}`;
 
       const { data: logs } = await supabase
-        .from("attendance_logs").select("employee_id, work_date, hr_note")
+        .from("attendance_logs").select("employee_id, work_date, hr_note, late_minutes, hr_extra_deduct")
         .in("employee_id", empIds).gte("work_date", dateFrom).lte("work_date", dateTo);
-      setAllLogs(logs || []);
+      setAllLogs(logs || []); const { data: _tags } = await supabase.from("late_tags").select("employee_id,tag_date,rate_per_minute").in("employee_id", empIds).gte("tag_date", dateFrom).lte("tag_date", dateTo); const _tm = {}; (_tags || []).forEach(t => { _tm[t.employee_id + "_" + t.tag_date] = t.rate_per_minute; }); setLateTagMap(_tm);
 
       const logDates = new Set((logs || []).map(l => l.work_date));
       setCycles(buildCyclesFromCalendar(year, month, logDates));
@@ -205,7 +205,7 @@ export default function WeeklyPage({ role }) {
       .filter(r => r.employees?.pay_schedule !== "end_of_month")
       .map(r => {
         const logs   = getLogsInCycle(r.employee_id, cycle);
-        const { workDays, wage } = calcCycleWageForEmployee(r, logs);
+        const { workDays, wage } = calcCycleWageForEmployee(r, logs, lateTagMap);
         const extra  = getExtraInCycle(r.employee_id, cycle);
         const advAmt = getAdvanceInCycle(r.employee_id, cycle);
         const advItems = getAdvancesInCycle(r.employee_id, cycle);
@@ -218,7 +218,7 @@ export default function WeeklyPage({ role }) {
   function getEmpSaturdayTotal(r) {
     if (r.employees?.pay_schedule === "end_of_month") return 0;
     return cycles.filter(c => !c.isMonthEnd).reduce((sum, c) => {
-      const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c));
+      const _v = vouchers[getCycleKey(c)]; if (_v && (_v.status === "approved" || _v.status === "submitted") && _v.lines) { const _ln = _v.lines.find(x => x.employee_id === r.employee_id); return sum + (_ln ? Number(_ln.to_pay || 0) : 0); } const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c), lateTagMap);
       const extra = getExtraInCycle(r.employee_id, c);
       const adv = getAdvanceInCycle(r.employee_id, c);
       return sum + Math.max(0, wage + extra - adv);
