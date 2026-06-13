@@ -593,13 +593,13 @@ export default function WeeklyPage({ role }) {
           toPay:  getMonthEndPay(r),
         }));
         const voucherMe  = vouchers["month_end"];
-        const statusInfo = voucherMe ? STATUS_LABEL[voucherMe.status] : null;
+        const statusInfo = voucherMe ? STATUS_LABEL[voucherMe.status] : null; const meCollapsed = collapsed["month_end"] !== undefined ? collapsed["month_end"] : (voucherMe?.status === "approved");
 
         return (
           <div style={{ ...s.cycleCard, border:"2px solid #7c3aed" }}>
-            <div style={{ ...s.cycleHeader, background:"#4c1d95" }}>
+            <div style={{ ...s.cycleHeader, background:"#4c1d95", cursor:"pointer" }} onClick={() => setCollapsed(p => ({ ...p, month_end: !meCollapsed }))}>
               <div>
-                <span style={s.cycleLabel}>💜 จ่ายสิ้นเดือน</span>
+                <span style={s.cycleLabel}>{meCollapsed ? "▶" : "▼"} 💜 จ่ายสิ้นเดือน</span>
                 <span style={s.cycleDates}>ส่วนที่เหลือ = สุทธิทั้งเดือน − จ่ายเสาร์แล้ว</span>
               </div>
               <span style={{ ...s.statusBadge,
@@ -609,6 +609,7 @@ export default function WeeklyPage({ role }) {
               </span>
             </div>
 
+            <div style={{ display: meCollapsed ? "none" : "block" }}>
             <div style={{ overflowX:"auto" }}>
               <table style={s.table}>
                 <thead><tr>
@@ -658,14 +659,14 @@ export default function WeeklyPage({ role }) {
               </table>
             </div>
 
-            {voucherMe && <VoucherInfo voucher={voucherMe} />}
-            <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows}
+            {!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
+            {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows}
               totalPay={monthEndTotal} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
               onApprove={() => approveVoucher("month_end")}
               onReturn={() => setReturnModal({ cycleKey:"month_end" })}
               onPrint={() => printVoucherSlips(voucherMe)}
-              purple />
+              purple />}
           </div>
         );
       })()}
