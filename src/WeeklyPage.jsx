@@ -183,7 +183,7 @@ export default function WeeklyPage({ role }) {
     return allLogs.filter(l =>
       l.employee_id === empId && l.work_date >= f && l.work_date <= t &&
       new Date(l.work_date + "T00:00:00").getDay() !== 0 &&
-      !(l.hr_note && /ขาด/.test(l.hr_note))   // 🆕 ขาดงาน ไม่นับวันทำ/ไม่จ่าย
+      !(l.hr_note && /ขาด|ลาป่วย|ลากิจ/.test(l.hr_note))   // 🆕 ขาดงาน ไม่นับวันทำ/ไม่จ่าย
     );
   }
 
