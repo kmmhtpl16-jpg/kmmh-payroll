@@ -113,7 +113,7 @@ export default function WeeklyPage({ role }) {
   const [submitting,   setSubmitting]   = useState(null);
   const [approving,    setApproving]    = useState(null);
   const [returnModal,  setReturnModal]  = useState(null);
-  const [returnReason, setReturnReason] = useState("");
+  const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({});
 
   const loadAll = useCallback(async () => {
     setLoading(true); setMsg(null);
