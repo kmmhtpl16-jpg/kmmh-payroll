@@ -71,7 +71,7 @@ function buildCyclesFromCalendar(year, month, logDates) {
       if (logDates.has(toLocalDateStr(new Date(year, month - 1, d)))) { hasLog = true; break; }
     }
     if (hasLog) cycles.push({ dateFrom, dateTo, fromDay, toDay });
-    fromDay = toDay + 1;
+    fromDay = toDay + 2;
   }
   const lastSat = saturdays[saturdays.length - 1] || 0;
   if (lastSat < daysInMonth) {
