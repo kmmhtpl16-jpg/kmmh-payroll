@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { calcLateDeduction } from "./payrollCalc";
 
-const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."]; const DOW_TH = ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."];
 
 // แสดงวันที่เป็น พ.ศ. วว/ดด/ปปปป (เก็บใน storage ยังเป็น ค.ศ. — แปลงเฉพาะตอนแสดงผล)
 function fmtDate(d) {
@@ -515,7 +515,7 @@ export default function WeeklyPage({ role }) {
             <div style={{ ...s.cycleHeader, cursor:"pointer" }} onClick={() => setCollapsed(p => ({ ...p, [cycleKey]: !isCollapsed }))}>
               <div>
                 <span style={s.cycleLabel}>{isCollapsed ? "▶" : "▼"} รอบที่ {ci+1}</span>
-                <span style={s.cycleDates}>จ. {fmtDate(cycle.dateFrom)} – ส. {fmtDate(cycle.dateTo)}</span>
+                <span style={s.cycleDates}>{DOW_TH[cycle.dateFrom.getDay()]} {fmtDate(cycle.dateFrom)} – {DOW_TH[cycle.dateTo.getDay()]} {fmtDate(cycle.dateTo)}</span>
               </div>
               <span style={{ ...s.statusBadge,
                 background: statusInfo?.bg || "#f1f5f9",
@@ -812,7 +812,7 @@ function DetailModal({ detail, onClose }) {
             border: `2px solid ${detail.isMonthEnd ? "#c4b5fd" : "#bfdbfe"}`,
           }}>
             <div style={{ fontSize:12, color: detail.isMonthEnd?"#6d28d9":"#1d4ed8", fontWeight:600, marginBottom:4 }}>
-              {detail.isMonthEnd ? "💜 จ่ายสิ้นเดือน" : `🔵 ${detail.cycleLabel} · จ. ${fmtDate(detail.cycleFrom)} – ส. ${fmtDate(detail.cycleTo)}`}
+              {detail.isMonthEnd ? "💜 จ่ายสิ้นเดือน" : `🔵 ${detail.cycleLabel} · ${DOW_TH[detail.cycleFrom.getDay()]} ${fmtDate(detail.cycleFrom)} – ${DOW_TH[detail.cycleTo.getDay()]} ${fmtDate(detail.cycleTo)}`}
             </div>
             <div style={{ fontSize:26, fontWeight:800, color: detail.isMonthEnd?"#4c1d95":"#1e3a5f" }}>
               {fmtInt(detail.toPay)} <span style={{ fontSize:14, fontWeight:400 }}>บาท</span>
