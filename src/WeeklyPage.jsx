@@ -113,7 +113,7 @@ export default function WeeklyPage({ role }) {
   const [submitting,   setSubmitting]   = useState(null);
   const [approving,    setApproving]    = useState(null);
   const [returnModal,  setReturnModal]  = useState(null);
-  const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({});
+  const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
     setLoading(true); setMsg(null);
@@ -508,13 +508,13 @@ export default function WeeklyPage({ role }) {
         const rows       = getSaturdayRows(cycle);
         const voucher    = vouchers[cycleKey];
         const totalPay   = rows.reduce((s,r) => s + r.toPay, 0);
-        const statusInfo = voucher ? STATUS_LABEL[voucher.status] : null;
+        const statusInfo = voucher ? STATUS_LABEL[voucher.status] : null; const isCollapsed = collapsed[cycleKey] !== undefined ? collapsed[cycleKey] : (voucher?.status === "approved");
 
         return (
           <div key={cycleKey} style={s.cycleCard}>
-            <div style={s.cycleHeader}>
+            <div style={{ ...s.cycleHeader, cursor:"pointer" }} onClick={() => setCollapsed(p => ({ ...p, [cycleKey]: !isCollapsed }))}>
               <div>
-                <span style={s.cycleLabel}>รอบที่ {ci+1}</span>
+                <span style={s.cycleLabel}>{isCollapsed ? "▶" : "▼"} รอบที่ {ci+1}</span>
                 <span style={s.cycleDates}>จ. {fmtDate(cycle.dateFrom)} – ส. {fmtDate(cycle.dateTo)}</span>
               </div>
               <span style={{ ...s.statusBadge,
@@ -524,7 +524,7 @@ export default function WeeklyPage({ role }) {
               </span>
             </div>
 
-            {rows.length === 0
+            <div style={{ display: isCollapsed ? "none" : "block" }}>{rows.length === 0
               ? <p style={s.emptyMsg}>ยังไม่มีข้อมูลการทำงานในรอบนี้</p>
               : <div style={{ overflowX:"auto" }}>
                   <table style={s.table}>
@@ -580,7 +580,7 @@ export default function WeeklyPage({ role }) {
               onSubmit={() => submitVoucher(cycle, rows, false)}
               onApprove={() => approveVoucher(cycleKey)}
               onReturn={() => setReturnModal({ cycleKey })}
-              onPrint={() => printVoucherSlips(voucher)} />
+              onPrint={() => printVoucherSlips(voucher)} /></div>
           </div>
         );
       })}
