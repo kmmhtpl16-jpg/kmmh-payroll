@@ -659,7 +659,7 @@ export default function WeeklyPage({ role }) {
               </table>
             </div>
 
-            {!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
+            </div>{!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
             {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows}
               totalPay={monthEndTotal} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
