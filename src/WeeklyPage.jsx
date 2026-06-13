@@ -90,7 +90,7 @@ function calcCycleWageForEmployee(record, logsInCycle, WTAG) {
   ).length;
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
   const dailyRate = record.base_wage / record.work_days;
-  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; logsInCycle.filter(l => new Date(l.work_date + "T00:00:00").getDay() !== 0).forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = parseFloat((dailyRate * workDays - _lateDed).toFixed(2));
+  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; logsInCycle.filter(l => new Date(l.work_date + "T00:00:00").getDay() !== 0).forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = Math.round(dailyRate * workDays - _lateDed);
   return { workDays, wage };
 }
 
@@ -209,7 +209,7 @@ export default function WeeklyPage({ role }) {
         const extra  = getExtraInCycle(r.employee_id, cycle);
         const advAmt = getAdvanceInCycle(r.employee_id, cycle);
         const advItems = getAdvancesInCycle(r.employee_id, cycle);
-        const toPay  = Math.max(0, parseFloat((wage + extra - advAmt).toFixed(2)));
+        const toPay  = Math.max(0, Math.round(wage + extra - advAmt));
         return { record: r, workDays, wage, extra, advAmt, advItems, toPay };
       })
       .filter(row => row.workDays > 0 || row.advAmt > 0 || row.extra > 0);
@@ -221,7 +221,7 @@ export default function WeeklyPage({ role }) {
       const _v = vouchers[getCycleKey(c)]; if (_v && (_v.status === "approved" || _v.status === "submitted") && _v.lines) { const _ln = _v.lines.find(x => x.employee_id === r.employee_id); return sum + (_ln ? Number(_ln.to_pay || 0) : 0); } const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c), lateTagMap);
       const extra = getExtraInCycle(r.employee_id, c);
       const adv = getAdvanceInCycle(r.employee_id, c);
-      return sum + Math.max(0, wage + extra - adv);
+      return sum + Math.max(0, Math.round(wage + extra - adv));
     }, 0);
   }
 
