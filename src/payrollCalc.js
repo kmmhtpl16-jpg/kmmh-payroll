@@ -268,9 +268,6 @@ export async function calcPayroll(year, month) {
 
       if (isSunday(log.work_date)) continue;
 
-      // 🆕 ขาดงาน → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
-      if (log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
-
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
@@ -282,14 +279,19 @@ export async function calcPayroll(year, month) {
 
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
-      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || ((emp.probation && !/แจ้งล่วงหน้า/.test(log.hr_note||'')) ? 5 : 1);
+      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
       late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
       ot_hours += parseFloat(log.ot_hours || 0);
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // 🆕 ลาป่วย/ลากิจครึ่งวัน = จ่ายเต็มวัน (ครึ่งที่ลาใช้สิทธิ์) → ไม่หักค่าแรงครึ่งวันแล้ว
+      // 🆕 ลาครึ่งวัน → มาทำงานครึ่งวัน base_wage บวกเต็มวันไปแล้ว
+      //   จึงหักคืนครึ่งวัน (dayRate / 2) เป็น leave_deduct → จ่ายจริงครึ่งวัน
+      if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) {
+        leave_deduct += dayRate / 2;
+        leave_days   += 0.5;
+      }
 
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
@@ -326,15 +328,18 @@ export async function calcPayroll(year, month) {
     const ss_base         = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
-    // 🔧 v7 — ประกันงาน (แก้ map ให้ตรง enum)
-    const job_insurance = isPerm ? insuranceAmount(emp.insurance_level) : 0;
+    // 🔧 v7.6 — ประกันงาน: เดือนที่ลาออก "ไม่หัก" (ไม่ฝากเข้ากระปุก)
+    //   เดิม v7.1 ใช้ตัวเลือก A (เดือนลาออกหักต่อ แล้วคืนทั้งก้อน) → สุทธิเท่ากัน
+    //   แต่ทำให้กระปุก/ยอดคืนโป่งขึ้น 1 เดือน (เคสโด้ โชว์ 600 แทน 400)
+    //   เปลี่ยนเป็น: ลาออกเดือนนี้ → job_insurance = 0 (ไม่หัก ไม่ฝาก) → กระปุกตรง
+    const job_insurance = (isPerm && !isResigningThisMonth)
+      ? insuranceAmount(emp.insurance_level) : 0;
 
-    // 🔧 v7.1 — insurance_refund (ตัวเลือก A): ลาออกเดือนนี้ → คืนกระปุก "รวมหักเดือนนี้"
-    //   = ยอดสะสมก่อนงวดนี้ (insBalanceExclMap) + ประกันที่หักเดือนนี้ (job_insurance)
-    //   • เดือนลาออกยังหักประกันตามปกติ (job_insurance อยู่ใน total_deduct)
-    //     แล้วคืนกลับทั้งก้อนผ่าน insurance_refund → สุทธิ = ได้กระปุกเดิมคืน
-    //   • คิดจาก exclMap จึง idempotent: re-save กี่ครั้งก็ได้ยอดเดิม
-    //   เคสโด้ มิ.ย.: 400 (ธ.ค.–พ.ค. − สงกรานต์) + 200 (มิ.ย.) = 600
+    // 🔧 v7.6 — insurance_refund: ลาออกเดือนนี้ → คืนยอดกระปุก "ไม่รวมงวดนี้"
+    //   = insBalanceExclMap + job_insurance(=0 เพราะเดือนลาออกไม่หัก)
+    //   → คืนเฉพาะที่สะสมจริง ไม่รวมเดือนลาออก (เคสโด้ = 400)
+    //   • idempotent ผ่าน exclMap: ถ้าคืนผ่านปุ่ม (refund period_id=null) ไปแล้ว
+    //     exclMap จะนับ refund นั้น → insurance_refund = 0 (กันคืนซ้ำ)
     const insurance_refund = isResigningThisMonth
       ? parseFloat(((insBalanceExclMap[emp.id] || 0) + job_insurance).toFixed(2))
       : 0;
