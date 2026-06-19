@@ -16,6 +16,7 @@ const HR_NOTE_PRESETS = [
   { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false },
   { label: "ขาดงาน", value: "ขาดงาน", fullDay: true },
   { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true }, { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false },
+  { label: "ติดส่งสินค้า", value: "ติดส่งสินค้า", fullDay: false, deliveryDuty: true },
 ];
 
 function processAttendance(rows, employees) {
@@ -149,12 +150,16 @@ export default function AttendancePage({ role }) {
     //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
     const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
     const isHalfDayLeave = !!(leavePreset && leavePreset.half);
+
+    // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
+    //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
+    const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
     const amFilled = am_in !== "" && am_out !== "";
     const pmFilled = pm_in !== "" && pm_out !== "";
 
     const allFilled = amFilled && pmFilled;
     // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
-    const isDone = allFilled || isFullDayAbsence || (isHalfDayLeave && (amFilled || pmFilled));
+    const isDone = allFilled || isFullDayAbsence || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty;
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -514,6 +519,7 @@ export default function AttendancePage({ role }) {
                   border:"1px solid #bbf7d0" }}>
                   💡 ปุ่มสีเขียว (ลา/ขาด/วันหยุด ทั้งวัน) — กดแล้วกด "บันทึก" ได้เลย ไม่ต้องกรอกเวลา
                   <br />🔵 ลาป่วย/ลากิจครึ่งวัน — กรอกครึ่งที่มาทำงานก็กด "บันทึก" ได้ จ่ายเต็มวัน + ลงหน้าการลาให้เอง
+                  <br />🚚 ติดส่งสินค้า — มีแค่เข้าเช้า กดปุ่มเดียวจบ จ่ายเต็มวัน แต่ยังหักสายเช้า
                 </p>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
                   {HR_NOTE_PRESETS.map(p => {
@@ -526,7 +532,7 @@ export default function AttendancePage({ role }) {
                           ...(p.fullDay ? s.presetBtnFullDay : {}),
                           ...(isActive ? (p.fullDay ? s.presetBtnFullDayActive : s.presetBtnActive) : {}),
                         }}>
-                        {p.fullDay ? "🟢 " : p.half ? "🔵 " : ""}{p.label}
+                        {p.fullDay ? "🟢 " : p.half ? "🔵 " : p.deliveryDuty ? "🚚 " : ""}{p.label}
                       </button>
                     );
                   })}
