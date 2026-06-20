@@ -8,6 +8,7 @@
 //   ── เอา "เงินประจำตำแหน่ง" ออก เพราะระบบคำนวณ+รวมในเงินเดือนให้แล้ว
 //      (ตั้งค่าคงที่ในโปรไฟล์พนักงาน) — คีย์ที่นี่จะนับซ้ำ
 //   ── เบี้ยขยันก็เช่นกัน: ระบบคิดเองจากการสแกน ไม่ต้องคีย์
+// 🔧 v3: เพิ่มช่องค้นหา (ชื่อ / ประเภท / หมายเหตุ) กรองรายการในงวด
 //
 // เพิ่มแท็บใน App.jsx:
 //   import ExtraIncomePage from "./ExtraIncomePage";
@@ -57,6 +58,7 @@ export default function ExtraIncomePage({ role }) {
   const [employees, setEmployees] = useState([]);
   const [entries,   setEntries]   = useState([]); // รายการทุกคนในงวด
   const [loading,   setLoading]   = useState(false);
+  const [query,     setQuery]     = useState("");   // 🔍 ค้นหา (ชื่อ/ประเภท/โน้ต)
 
   // cache ยอดจากระบบ ราย employee_id → {ot:{hours,amount}|null}
   const [sysCache, setSysCache] = useState({});
@@ -256,16 +258,30 @@ export default function ExtraIncomePage({ role }) {
     loadEntries();
   }
 
-  // ── จัดกลุ่มรายการตามพนักงาน ──
-  const grouped = {};
-  for (const e of entries) {
-    if (!grouped[e.employee_id]) grouped[e.employee_id] = [];
-    grouped[e.employee_id].push(e);
-  }
+  // ── helper: ชื่อ/ประเภท ──
   const empMap = Object.fromEntries(employees.map((e) => [e.id, e]));
 
   const typeLabel = (e) =>
     e.income_type === "other" ? e.label : INCOME_TYPES.find((t) => t.value === e.income_type)?.label || e.income_type;
+
+  // 🔍 ค้นหา — ชื่อพนักงาน / ประเภท / หมายเหตุ
+  const q = query.trim().toLowerCase();
+  const matchEntry = (e) => {
+    if (!q) return true;
+    const emp = empMap[e.employee_id];
+    const typeName = INCOME_TYPES.find((t) => t.value === e.income_type)?.label || e.income_type;
+    const hay = [emp?.nickname, emp?.emp_code, e.label, typeName, e.income_type, e.amount_note]
+      .filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  };
+
+  // ── จัดกลุ่มรายการตามพนักงาน (กรองด้วยค้นหา) ──
+  const grouped = {};
+  for (const e of entries) {
+    if (!matchEntry(e)) continue;
+    if (!grouped[e.employee_id]) grouped[e.employee_id] = [];
+    grouped[e.employee_id].push(e);
+  }
 
   // ── UI ──
   return (
@@ -379,10 +395,17 @@ export default function ExtraIncomePage({ role }) {
 
       {/* ── รายการในงวด (จัดกลุ่มตามคน) ── */}
       <h3 style={S.listTitle}>💰 รายได้พิเศษในงวดนี้</h3>
+
+      {/* ── 🔍 ช่องค้นหา ── */}
+      <input type="text" value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="🔍 ค้นหา — ชื่อ / ประเภท / หมายเหตุ"
+        style={S.searchInput} />
+
       {loading ? (
         <p style={S.hint}>กำลังโหลด...</p>
-      ) : entries.length === 0 ? (
-        <p style={S.hint}>ยังไม่มีรายได้พิเศษในงวดนี้</p>
+      ) : Object.keys(grouped).length === 0 ? (
+        <p style={S.hint}>{q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีรายได้พิเศษในงวดนี้"}</p>
       ) : (
         Object.entries(grouped).map(([empId, list]) => {
           const emp = empMap[empId];
@@ -449,6 +472,7 @@ const S = {
   lbl: { display: "block", fontSize: "0.8rem", color: "#6b7280", marginBottom: 4 },
   select: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
   input: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
+  searchInput: { width: "100%", padding: "0.7rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box", marginBottom: 12, background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
   beHint: { fontSize: "0.72rem", color: "#9ca3af", marginTop: 4 },
   cycleRow: { display: "flex", gap: 12, marginTop: 6 },
   cycleCard: { flex: 1, border: "2px solid #e5e7eb", borderRadius: 10, padding: "0.8rem", cursor: "pointer", textAlign: "center", transition: "all 0.15s" },
