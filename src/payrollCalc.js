@@ -1,7 +1,13 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.5
+// คำนวณเงินเดือน KMMH — v7.7
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.7 เปลี่ยนจาก v7.6:
+//   • [วันอาทิตย์] ลาออกระหว่างเดือน → ตัดวันอาทิตย์หลังวันลาออกออก (countSundays รับ toDay)
+//     เดิมจ่ายอาทิตย์ทั้งเดือน แม้ลาออกไปแล้ว (เคสโด้ ลาออก 17 → ได้แค่ 7,14)
+//   • [กู้คืน] commit v7.6 (อัปจากไฟล์เก่า) เผลอลบ 3 ฟีเจอร์ — เอากลับ:
+//     - ขาดงานไม่จ่าย (ตัด work_days)  - ทัณฑ์บนค่าสาย 5 บ./นาที  - ลาครึ่งวันจ่ายเต็ม
 //
 // 🔧 v7.5 เปลี่ยนจาก v7.4:
 //   • [#9] export `calcLateDeduction` ออกมาเป็น single source of truth
@@ -89,11 +95,12 @@ function isSunday(dateStr) {
   return new Date(y, m - 1, d).getDay() === 0;
 }
 
-// นับวันอาทิตย์ในเดือนจากปฏิทิน (ตั้งแต่ fromDay ถึงสิ้นเดือน)
-function countSundays(year, month, fromDay = 1) {
-  const days = daysInMonth(year, month);
+// นับวันอาทิตย์ในเดือนจากปฏิทิน (ตั้งแต่ fromDay ถึง toDay; default = สิ้นเดือน)
+// 🔧 v7.7 — เพิ่ม toDay เพื่อตัดวันอาทิตย์หลังวันลาออก (ลาออกระหว่างเดือนไม่จ่ายอาทิตย์ที่ยังไม่ถึง)
+function countSundays(year, month, fromDay = 1, toDay = null) {
+  const lastDay = toDay || daysInMonth(year, month);
   let count = 0;
-  for (let d = fromDay; d <= days; d++) {
+  for (let d = fromDay; d <= lastDay; d++) {
     if (new Date(year, month - 1, d).getDay() === 0) count++;
   }
   return count;
@@ -268,6 +275,9 @@ export async function calcPayroll(year, month) {
 
       if (isSunday(log.work_date)) continue;
 
+      // 🆕 ขาดงาน → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
+      if (log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
+
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
@@ -279,19 +289,14 @@ export async function calcPayroll(year, month) {
 
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
-      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || 1;
+      const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || ((emp.probation && !/แจ้งล่วงหน้า/.test(log.hr_note||'')) ? 5 : 1);
       late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
       ot_hours += parseFloat(log.ot_hours || 0);
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // 🆕 ลาครึ่งวัน → มาทำงานครึ่งวัน base_wage บวกเต็มวันไปแล้ว
-      //   จึงหักคืนครึ่งวัน (dayRate / 2) เป็น leave_deduct → จ่ายจริงครึ่งวัน
-      if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) {
-        leave_deduct += dayRate / 2;
-        leave_days   += 0.5;
-      }
+      // 🆕 ลาป่วย/ลากิจครึ่งวัน = จ่ายเต็มวัน (ครึ่งที่ลาใช้สิทธิ์) → ไม่หักค่าแรงครึ่งวันแล้ว
 
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
@@ -301,13 +306,19 @@ export async function calcPayroll(year, month) {
     const hourly_rate = parseFloat((daily_rate / 8).toFixed(2));
 
     // ── ค่าแรงวันอาทิตย์ (v4) ──
+    // 🔧 v7.7 — ลาออกระหว่างเดือน: ตัดวันอาทิตย์หลังวันลาออกออก (จ่ายเฉพาะอาทิตย์ที่ยังทำงานอยู่)
+    const resignDateH = (emp.resigned_date || "").slice(0, 10);
+    const isResigningThisMonthH = resignDateH >= dateFrom && resignDateH <= dateTo;
     let holiday_days = 0;
     let holiday_wage = 0;
     if (isPerm) {
       const fromDay = permStartInMonth
         ? parseInt(permStart.slice(8, 10), 10)
         : 1;
-      holiday_days = countSundays(ce, month, fromDay);
+      const toDay = isResigningThisMonthH
+        ? parseInt(resignDateH.slice(8, 10), 10)
+        : null;
+      holiday_days = countSundays(ce, month, fromDay, toDay);
       holiday_wage = parseFloat((dailyPerm * holiday_days).toFixed(2));
     }
 
