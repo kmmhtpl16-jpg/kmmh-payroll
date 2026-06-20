@@ -8,6 +8,7 @@
 //        - จับคู่รอบจาก cycle_date ที่ HR เลือก; จับไม่ได้ → รอบเสาร์สุดท้าย
 // 🔧 v5.1: รวม income_type='other' (disburse_on='saturday') เข้ารอบเสาร์ด้วย
 //          (อยู่ใน net_pay แล้ว → สูตรสิ้นเดือน = สุทธิ − เสาร์ นับครั้งเดียว ยอดตรง)
+// 🔧 v5.2: สลิปสิ้นเดือน + ป็อปอัปรายคน โชว์บรรทัด "คืนค่าประกันงาน/ค่าสมัครงาน" (เฉพาะตอนลาออก)
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
@@ -357,6 +358,11 @@ export default function WeeklyPage({ role }) {
     payrolls.forEach(r => { nameMap[r.employee_id] = r.employees?.full_name; });
     const fullNameOf = (l) => l.full_name || nameMap[l.employee_id] || "";
 
+    // 🔧 v5.2: ยอดคืน (ประกันงาน/ค่าสมัคร) ตอนลาออก — ดึงสดจาก payroll_records เพื่อโชว์เป็นหมายเหตุใต้สุทธิ
+    const refundMap = {};
+    payrolls.forEach(r => { refundMap[r.employee_id] = {
+      ins: Number(r.insurance_refund || 0), app: Number(r.app_fee_refund || 0) }; });
+
     const money = (n) => Number(n||0).toLocaleString("th-TH",{ minimumFractionDigits:2, maximumFractionDigits:2 });
     const esc   = (str) => String(str==null?"":str).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
 
@@ -364,8 +370,16 @@ export default function WeeklyPage({ role }) {
       if (isMonthEnd) {
         const sat = Number(l.advance||0);
         const net = sat + Number(l.to_pay||0);
+        const rf  = refundMap[l.employee_id] || { ins:0, app:0 };
+        const rfParts = [];
+        if (rf.ins > 0) rfParts.push(`คืนประกัน ${money(rf.ins)}`);
+        if (rf.app > 0) rfParts.push(`คืนค่าสมัคร ${money(rf.app)}`);
+        const rfNote = rfParts.length
+          ? `<div class="row note"><span>(รวม${rfParts.join(" + ")})</span><span></span></div>`
+          : "";
         return `
           <div class="row"><span>สุทธิทั้งเดือน</span><span>${money(net)}</span></div>
+          ${rfNote}
           <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
           <div class="line"></div>
           <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>`;
@@ -432,6 +446,7 @@ export default function WeeklyPage({ role }) {
         .body { font-size:14px; }
         .row { display:flex; justify-content:space-between; padding:2.2mm 0; }
         .row span:last-child { font-variant-numeric:tabular-nums; }
+        .note { font-size:11px; color:#64748b; padding:0 0 1.5mm; }
         .green { color:#166534; }
         .red { color:#b91c1c; }
         .line { border-top:1px solid #e2e8f0; margin:1.5mm 0; }
@@ -867,6 +882,9 @@ function DetailModal({ detail, onClose }) {
             <MiniRow label={`OT (${r.ot_hours||0} ชม.)`} value={fmt(r.ot_amount)} />
             <MiniRow label="เงินประจำตำแหน่ง"    value={fmt(r.position_allowance)} />
             <MiniRow label="เบี้ยขยัน"            value={fmt(r.diligence_bonus)} />
+            {Number(r.other_income) > 0 && <MiniRow label="รายได้อื่นๆ" value={fmt(r.other_income)} green />}
+            {Number(r.insurance_refund) > 0 && <MiniRow label="คืนค่าประกันงาน" value={fmt(r.insurance_refund)} green />}
+            {Number(r.app_fee_refund) > 0 && <MiniRow label="คืนค่าสมัครงาน" value={fmt(r.app_fee_refund)} green />}
             <MiniRow label="รวมรายได้" value={fmt(r.total_income)} bold green />
           </Section>
 
