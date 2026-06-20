@@ -27,6 +27,7 @@ export default function DeductionsPage({ role }) {
   const [deductionTypes, setDeductionTypes] = useState([]);
   const [deductions,     setDeductions]     = useState([]);
   const [loading,        setLoading]        = useState(false);
+  const [query,          setQuery]          = useState("");   // 🔍 ค้นหา (ชื่อ/ประเภท/โน้ต)
 
   // ── form state ──
   const [form, setForm] = useState({
@@ -152,11 +153,22 @@ export default function DeductionsPage({ role }) {
 
   const canEdit = (row) => !row.is_paid || role === "owner";
 
+  // 🔍 ค้นหา — กรองตามชื่อพนักงาน / ประเภท / หมายเหตุ
+  const q = query.trim().toLowerCase();
+  const matchRow = (d, emp) => {
+    if (!q) return true;
+    const hay = [emp?.nickname, emp?.emp_code, emp?.full_name, d.deduction_types?.name, d.note]
+      .filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  };
+
   const summary = employees.map(emp => {
-    const rows = deductions.filter(d => d.employee_id === emp.id && !d.is_paid);
+    const rows = deductions.filter(d => d.employee_id === emp.id && !d.is_paid && matchRow(d, emp));
     if (rows.length === 0) return null;
     return { emp, rows, total: rows.reduce((s, r) => s + Number(r.amount), 0) };
   }).filter(Boolean);
+
+  const paidRows = deductions.filter(d => d.is_paid && matchRow(d, d.employees));
 
   return (
     <div style={s.page}>
@@ -272,12 +284,20 @@ export default function DeductionsPage({ role }) {
         </button>
       </div>
 
+      {/* ── 🔍 ช่องค้นหา (กรองทั้งรายการค้างหัก + ประวัติ) ── */}
+      <input type="text" value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder="🔍 ค้นหา — ชื่อพนักงาน / ประเภท / หมายเหตุ"
+        style={s.searchInput} />
+
       {/* ── รายจ่ายที่ยังไม่ได้หัก ── */}
       <div style={s.card}>
         <h3 style={s.cardTitle}>⏳ รายจ่ายที่ยังไม่ได้หัก</h3>
         {loading && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
         {!loading && summary.length === 0 && (
-          <p style={{ color:"#9ca3af", textAlign:"center", padding:24 }}>ยังไม่มีรายจ่ายค้างอยู่</p>
+          <p style={{ color:"#9ca3af", textAlign:"center", padding:24 }}>
+            {q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีรายจ่ายค้างอยู่"}
+          </p>
         )}
         {summary.map(({ emp, rows, total }) => (
           <div key={emp.id} style={s.empGroup}>
@@ -318,10 +338,12 @@ export default function DeductionsPage({ role }) {
       {/* ── ประวัติที่หักแล้ว ── */}
       <div style={s.card}>
         <h3 style={s.cardTitle}>✅ ประวัติที่หักออกแล้ว</h3>
-        {deductions.filter(d => d.is_paid).length === 0 && (
-          <p style={{ color:"#9ca3af", textAlign:"center", padding:16, fontSize:13 }}>ยังไม่มีประวัติ</p>
+        {paidRows.length === 0 && (
+          <p style={{ color:"#9ca3af", textAlign:"center", padding:16, fontSize:13 }}>
+            {q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติ"}
+          </p>
         )}
-        {deductions.filter(d => d.is_paid).map(row => (
+        {paidRows.map(row => (
           <div key={row.id} style={{ ...s.deductRow, opacity:0.65 }}>
             <div style={{ flex:1, display:"flex", alignItems:"center", flexWrap:"wrap", gap:4 }}>
               <span style={{ fontWeight:600, fontSize:13 }}>{row.employees?.nickname}</span>
@@ -405,6 +427,7 @@ const s = {
   formGrid: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 },
   label:    { display:"block", fontSize:12, color:"#64748b", fontWeight:600, marginBottom:4 },
   input:    { padding:"8px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14, width:"100%", boxSizing:"border-box" },
+  searchInput: { padding:"11px 14px", border:"1.5px solid #e2e8f0", borderRadius:10, fontSize:14, width:"100%", boxSizing:"border-box", background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,0.06)" },
   select:   { width:"100%", padding:"8px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14 },
   btn:      { padding:"8px 16px", borderRadius:8, border:"1px solid #e2e8f0",
               background:"#f8fafc", cursor:"pointer", fontWeight:600, fontSize:14 },
