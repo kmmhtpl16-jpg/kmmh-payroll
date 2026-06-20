@@ -1,7 +1,11 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.7
+// คำนวณเงินเดือน KMMH — v7.8
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.8 เปลี่ยนจาก v7.7:
+//   • [ลาครึ่งวัน] นับ 0.5 วัน จ่ายครึ่งวัน (ทำงานเช้า ลาบ่าย → ครึ่งที่ลาไม่จ่าย)
+//     เดิม v7.7 จ่ายเต็มวัน — เปลี่ยนตามนโยบายใหม่: work_days += 0.5, base += dayRate*0.5
 //
 // 🔧 v7.7 เปลี่ยนจาก v7.6:
 //   • [วันอาทิตย์] ลาออกระหว่างเดือน → ตัดวันอาทิตย์หลังวันลาออกออก (countSundays รับ toDay)
@@ -282,10 +286,14 @@ export async function calcPayroll(year, month) {
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
 
-      work_days += 1;
+      // 🆕 v7.8 — ลาครึ่งวัน: ทำงานเช้า ลาบ่าย → นับ 0.5 วัน จ่ายครึ่งวัน (ครึ่งที่ลาไม่จ่าย)
+      const isHalfDay = log.hr_note && /ลาครึ่งวัน/.test(log.hr_note);
+      const dayFactor = isHalfDay ? 0.5 : 1;
 
-      if (usePerm) perm_base  += dayRate;
-      else         trial_base += dayRate;
+      work_days += dayFactor;
+
+      if (usePerm) perm_base  += dayRate * dayFactor;
+      else         trial_base += dayRate * dayFactor;
 
       const lateMin = log.late_minutes || 0;
       late_minutes += lateMin;
@@ -296,8 +304,7 @@ export async function calcPayroll(year, month) {
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      // 🆕 ลาป่วย/ลากิจครึ่งวัน = จ่ายเต็มวัน (ครึ่งที่ลาใช้สิทธิ์) → ไม่หักค่าแรงครึ่งวันแล้ว
-
+      if (isHalfDay) leave_days += 0.5;
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
 
