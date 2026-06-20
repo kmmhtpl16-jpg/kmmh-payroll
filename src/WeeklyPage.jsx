@@ -9,6 +9,7 @@
 // 🔧 v5.1: รวม income_type='other' (disburse_on='saturday') เข้ารอบเสาร์ด้วย
 //          (อยู่ใน net_pay แล้ว → สูตรสิ้นเดือน = สุทธิ − เสาร์ นับครั้งเดียว ยอดตรง)
 // 🔧 v5.2: สลิปสิ้นเดือน + ป็อปอัปรายคน โชว์บรรทัด "คืนค่าประกันงาน/ค่าสมัครงาน" (เฉพาะตอนลาออก)
+// 🔧 v5.3: "ลาครึ่งวัน" ตัดออกจากรอบเสาร์ด้วย → ทุกการลาจ่ายสิ้นเดือน (เดิมเฉพาะ ลาป่วย/ลากิจ/ขาด)
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
@@ -184,7 +185,7 @@ export default function WeeklyPage({ role }) {
     return allLogs.filter(l =>
       l.employee_id === empId && l.work_date >= f && l.work_date <= t &&
       new Date(l.work_date + "T00:00:00").getDay() !== 0 &&
-      !(l.hr_note && /ขาด|ลาป่วย|ลากิจ/.test(l.hr_note))   // 🆕 ขาดงาน ไม่นับวันทำ/ไม่จ่าย
+      !(l.hr_note && /ขาด|ลาป่วย|ลากิจ|ครึ่งวัน/.test(l.hr_note))   // 🆕 ขาด/ลา/ลาครึ่งวัน → ไม่เข้ารอบเสาร์ (ทุกการลาจ่ายสิ้นเดือน)
     );
   }
 
