@@ -5,6 +5,7 @@
 // 🔧 v4: ตอนกด "บันทึกลง DB" ระบบจะเตรียมรายการ OT ลงหน้ารายได้พิเศษให้
 //        อัตโนมัติ (ตั้งต้นจ่ายสิ้นเดือน) — ยอดสุทธิหน้านี้ยังรวม OT ตามเดิม
 // 🔧 v5: ตารางเต็มความกว้างจอ + ตรึงคอลัมน์ "ชื่อ" ให้ติดซ้ายตลอดเวลาเลื่อน
+// 🔧 v6: ป็อปอัปรายคนโชว์บรรทัด "คืนค่าประกันงาน" + "คืนค่าสมัครงาน" (เฉพาะตอนลาออก > 0)
 import { useState } from "react";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
 import { exportPayrollExcel } from "./payrollExport";
@@ -221,6 +222,12 @@ export default function PayrollPage({ role }) {
                 ["เบี้ยขยัน",         `+${fmt(detail.diligence_bonus)}`],
                 ["รายได้อื่นๆ",       `+${fmt(detail.other_income)}`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} />)}
+              {detail.insurance_refund > 0 && (
+                <Row label="คืนค่าประกันงาน" value={`+${fmt(detail.insurance_refund)}`} green />
+              )}
+              {detail.app_fee_refund > 0 && (
+                <Row label="คืนค่าสมัครงาน" value={`+${fmt(detail.app_fee_refund)}`} green />
+              )}
               <Row label="รวมรายได้" value={fmt(detail.total_income)} bold green />
 
               {/* ── รายหักทั้งเดือน ── */}
