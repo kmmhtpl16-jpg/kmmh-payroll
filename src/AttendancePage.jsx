@@ -75,6 +75,8 @@ export default function AttendancePage({ role }) {
   const [editValues, setEditValues] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMsg, setEditMsg] = useState(null);
+  const [reviewQuery, setReviewQuery] = useState("");    // 🔍 ค้นหารายการเวลา (ชื่อ/โน้ต)
+  const [collapsedEmp, setCollapsedEmp] = useState({});  // พับกลุ่มตามพนักงาน
 
   useEffect(() => { loadEmployees(); loadHistory(); }, []);
 
@@ -301,6 +303,30 @@ export default function AttendancePage({ role }) {
     { id: "history", label: "📁 คลังไฟล์" },
   ];
 
+  // 🔍 ค้นหา + จัดกลุ่มรายการเวลาตามพนักงาน (เรียงตามชื่อ)
+  const reviewQ = reviewQuery.trim().toLowerCase();
+  const matchLog = (log) => {
+    if (!reviewQ) return true;
+    const hay = [log.employees?.nickname, log.employees?.emp_code, log.hr_note, log.work_date]
+      .filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(reviewQ);
+  };
+  const reviewGroups = (() => {
+    const map = {};
+    for (const log of reviewLogs) {
+      if (!matchLog(log)) continue;
+      const key = log.employee_id || log.employees?.emp_code || "unknown";
+      if (!map[key]) map[key] = {
+        name: log.employees?.nickname || log.employee_id || "—",
+        code: log.employees?.emp_code || "",
+        logs: [],
+      };
+      map[key].logs.push(log);
+    }
+    return Object.entries(map).sort((a, b) =>
+      String(a[1].name).localeCompare(String(b[1].name), "th"));
+  })();
+
   return (
     <div style={s.page}>
       <div style={s.sectionTabs}>
@@ -386,46 +412,75 @@ export default function AttendancePage({ role }) {
         <div style={s.section}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
             <div>
-              <h3 style={{ margin:0, fontSize:15 }}>📋 รายการเวลาทั้งหมด (แก้ไขย้อนหลังได้)</h3>
+              <h3 style={{ margin:0, fontSize:15 }}>📋 รายการเวลาทั้งหมด (จัดกลุ่มตามชื่อ)</h3>
               <p style={{ margin:"4px 0 0", fontSize:12, color:"#64748b" }}>
-                กรอกเวลาให้ครบ 4 จุด → ระบบคำนวณสาย/OT ใหม่อัตโนมัติ + ปลด 🟡
+                กรอกเวลาให้ครบ 4 จุด → ระบบคำนวณสาย/OT ใหม่อัตโนมัติ + ปลด 🟡 · คลิกชื่อเพื่อย่อ/ขยาย
               </p>
             </div>
             <button onClick={loadReviewLogs} style={s.refreshBtn}>🔄 โหลดใหม่</button>
           </div>
 
+          {/* 🔍 ช่องค้นหา */}
+          <input type="text" value={reviewQuery}
+            onChange={e => setReviewQuery(e.target.value)}
+            placeholder="🔍 ค้นหา — ชื่อพนักงาน / หมายเหตุ / วันที่"
+            style={s.searchInput} />
+
           {loadingReview && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
-          {!loadingReview && reviewLogs.length === 0 && (
-            <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>🎉 ไม่มีรายการที่ต้องตรวจแล้ว</p>
+          {!loadingReview && reviewGroups.length === 0 && (
+            <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>
+              {reviewQ ? "ไม่พบรายการที่ค้นหา" : "🎉 ยังไม่มีรายการเวลา"}
+            </p>
           )}
 
-          {reviewLogs.map(log => { const locked = !log.needs_hr_review && !!log.hr_edited_at; return (
-            <div key={log.id} style={{ ...s.reviewCard, ...(locked ? s.reviewCardLocked : (log.needs_hr_review ? {} : s.reviewCardClean)) }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                <div>
-                  <span style={{ fontWeight:700, fontSize:14 }}>{log.employees?.nickname || log.employee_id}</span>
-                  <span style={{ marginLeft:10, color:"#64748b", fontSize:13 }}>{log.work_date}</span>
-                  {log.hr_note && (
-                    <span style={{ marginLeft:8, fontSize:12, color:"#92400e",
-                      background:"#fffbeb", padding:"1px 8px", borderRadius:4 }}>
-                      {log.hr_note}
-                    </span>
-                  )}
+          {/* จัดกลุ่มตามพนักงาน — หัวชื่อพับได้ */}
+          {reviewGroups.map(([empKey, grp]) => {
+            const isCol = collapsedEmp[empKey];
+            const reviewN = grp.logs.filter(l => l.needs_hr_review).length;
+            return (
+              <div key={empKey} style={s.empBlock}>
+                <div style={s.empHeaderRow}
+                  onClick={() => setCollapsedEmp(p => ({ ...p, [empKey]: !isCol }))}>
+                  <span style={{ fontWeight:700, fontSize:14 }}>{isCol ? "▶" : "▼"} {grp.name}</span>
+                  {grp.code && <span style={{ marginLeft:8, color:"#94a3b8", fontSize:12 }}>{grp.code}</span>}
+                  <span style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center" }}>
+                    {reviewN > 0 && <span style={s.empReviewBadge}>🟡 {reviewN}</span>}
+                    <span style={s.empCountBadge}>{grp.logs.length} วัน</span>
+                  </span>
                 </div>
-                {locked ? <span style={s.lockedTag}>✏️ แก้ไขแล้ว 🔒</span> : <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>}
+
+                {!isCol && grp.logs.map(log => {
+                  const locked = !log.needs_hr_review && !!log.hr_edited_at;
+                  return (
+                    <div key={log.id} style={{ ...s.reviewCard, ...(locked ? s.reviewCardLocked : (log.needs_hr_review ? {} : s.reviewCardClean)) }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                        <div>
+                          <span style={{ fontWeight:600, fontSize:13, color:"#475569" }}>{log.work_date}</span>
+                          {log.hr_note && (
+                            <span style={{ marginLeft:8, fontSize:12, color:"#92400e",
+                              background:"#fffbeb", padding:"1px 8px", borderRadius:4 }}>
+                              {log.hr_note}
+                            </span>
+                          )}
+                        </div>
+                        {locked ? <span style={s.lockedTag}>✏️ แก้ไขแล้ว 🔒</span> : <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>}
+                      </div>
+                      <div style={{ display:"flex", gap:16, marginTop:8, fontSize:13 }}>
+                        {[["เข้าเช้า", log.scan_am_in], ["พักออก", log.scan_am_out],
+                          ["พักกลับ", log.scan_pm_in], ["ออกเย็น", log.scan_pm_out]].map(([label, val]) => (
+                          <div key={label}>
+                            <span style={{ color:"#94a3b8", fontSize:11 }}>{label}</span>
+                            <p style={{ margin:"2px 0 0", fontWeight: val?600:400,
+                              color: val?"#1e293b":"#dc2626" }}>{val || "❌ ขาด"}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div style={{ display:"flex", gap:16, marginTop:8, fontSize:13 }}>
-                {[["เข้าเช้า", log.scan_am_in], ["พักออก", log.scan_am_out],
-                  ["พักกลับ", log.scan_pm_in], ["ออกเย็น", log.scan_pm_out]].map(([label, val]) => (
-                  <div key={label}>
-                    <span style={{ color:"#94a3b8", fontSize:11 }}>{label}</span>
-                    <p style={{ margin:"2px 0 0", fontWeight: val?600:400,
-                      color: val?"#1e293b":"#dc2626" }}>{val || "❌ ขาด"}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );})}
+            );
+          })}
         </div>
       )}
 
@@ -640,8 +695,17 @@ const s = {
     color:"#fff", border:"none", fontSize:16, fontWeight:700, cursor:"pointer" },
   refreshBtn: { padding:"6px 14px", borderRadius:8, border:"1px solid #e2e8f0",
     background:"#f8fafc", cursor:"pointer", fontSize:13 },
+  searchInput: { width:"100%", padding:"10px 14px", border:"1.5px solid #e2e8f0", borderRadius:10,
+    fontSize:14, boxSizing:"border-box", marginBottom:12, background:"#fff" },
+  empBlock: { border:"1px solid #e2e8f0", borderRadius:10, overflow:"hidden", marginBottom:10 },
+  empHeaderRow: { display:"flex", alignItems:"center", padding:"10px 12px",
+    background:"#f8fafc", cursor:"pointer", borderBottom:"1px solid #eef2f7" },
+  empCountBadge: { background:"#eff6ff", color:"#1d4ed8", padding:"2px 10px",
+    borderRadius:20, fontSize:12, fontWeight:700 },
+  empReviewBadge: { background:"#fffbeb", color:"#92400e", padding:"2px 10px",
+    borderRadius:20, fontSize:12, fontWeight:700 },
   reviewCard: { padding:"12px 14px", borderRadius:10,
-    border:"1.5px solid #fde68a", background:"#fffbeb", marginBottom:8 },
+    border:"1.5px solid #fde68a", background:"#fffbeb", margin:"8px 10px" },
   editBtn: { padding:"6px 14px", borderRadius:8, border:"1.5px solid #e2e8f0",
     background:"#fff", cursor:"pointer", fontWeight:600, fontSize:13 },
   reviewCardLocked: { border:"1.5px solid #bbf7d0", background:"#f0fdf4" }, reviewCardClean: { border:"1.5px solid #e2e8f0", background:"#fff" },
