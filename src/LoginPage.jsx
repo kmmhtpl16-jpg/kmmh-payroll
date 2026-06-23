@@ -1,7 +1,8 @@
 // src/LoginPage.jsx
 // ─────────────────────────────────────────────
 // หน้า PIN lock screen สำหรับ KMMH Payroll
-// - ดึง PIN จาก Supabase (app_config)
+// - ตรวจ PIN ผ่าน RPC verify_login_pin (ฝั่ง server) — ไม่อ่าน PIN จาก app_config ตรงๆ อีกแล้ว
+//   เพื่อให้ปิด RLS ตาราง app_config กัน anon ดึง PIN/โทเคนได้
 // - unlock ด้วย PIN ถูกต้อง → ส่ง role ('hr' | 'owner') กลับ
 // - PIN ผิด 5 ครั้ง → cooldown 30 วินาที
 // ─────────────────────────────────────────────
@@ -11,6 +12,8 @@ import { supabase } from "./supabaseClient";
 
 const MAX_ATTEMPTS = 5;
 const COOLDOWN_SEC = 30;
+const MIN_PIN_LEN = 4;
+const MAX_PIN_LEN = 6;
 
 export default function LoginPage({ onLogin }) {
   const [pin, setPin] = useState("");
@@ -18,22 +21,7 @@ export default function LoginPage({ onLogin }) {
   const [loading, setLoading] = useState(false);
   const [attempts, setAttempts] = useState(0);
   const [cooldown, setCooldown] = useState(0); // วินาทีที่เหลือ
-  const [configs, setConfigs] = useState(null); // { pin_hr, pin_owner }
-  const inputRef = useRef(null);
-
-  // ─── โหลด PIN จาก Supabase ───────────────────────────────
-  useEffect(() => {
-    (async () => {
-      const { data, error } = await supabase
-        .from("app_config")
-        .select("key, value")
-        .in("key", ["pin_hr", "pin_owner"]);
-      if (error || !data) return;
-      const cfg = {};
-      data.forEach((r) => (cfg[r.key] = r.value));
-      setConfigs(cfg);
-    })();
-  }, []);
+  const checkingRef = useRef(false);
 
   // ─── Cooldown timer ──────────────────────────────────────
   useEffect(() => {
@@ -52,39 +40,42 @@ export default function LoginPage({ onLogin }) {
     return () => clearInterval(t);
   }, [cooldown]);
 
+  // ─── ตรวจ PIN ผ่าน server (RPC) ─────────────────────────
+  // markWrongIfNoMatch = true → ถ้าไม่ตรงให้นับเป็นผิดทันที (ใช้ตอนกด Enter)
+  const checkPin = async (candidate, markWrongIfNoMatch) => {
+    if (checkingRef.current || loading) return;
+    if (candidate.length < MIN_PIN_LEN) return;
+    checkingRef.current = true;
+    try {
+      const { data, error: rpcErr } = await supabase.rpc("verify_login_pin", {
+        p_pin: candidate,
+      });
+      if (rpcErr) {
+        setError("เชื่อมต่อไม่ได้ ลองใหม่");
+        return;
+      }
+      if (data === "owner" || data === "hr") {
+        handleSubmit(candidate, data);
+      } else if (markWrongIfNoMatch || candidate.length >= MAX_PIN_LEN) {
+        handleWrongPin();
+      }
+    } finally {
+      checkingRef.current = false;
+    }
+  };
+
   // ─── กดปุ่ม numpad ───────────────────────────────────────
   const handleKey = (k) => {
-    if (cooldown > 0) return;
+    if (cooldown > 0 || loading) return;
     if (k === "del") {
       setPin((p) => p.slice(0, -1));
       setError("");
       return;
     }
-    if (pin.length >= 6) return; // PIN สูงสุด 6 หลัก
+    if (pin.length >= MAX_PIN_LEN) return;
     const next = pin + k;
     setPin(next);
-
-    // auto-submit เมื่อกรอกครบ (4–6 หลัก) ถ้าตรงกับ PIN ที่โหลดมา
-    if (configs) {
-      const matched =
-        next === configs.pin_owner
-          ? "owner"
-          : next === configs.pin_hr
-          ? "hr"
-          : null;
-      if (matched) {
-        handleSubmit(next, matched);
-        return;
-      }
-      // ถ้าพิมพ์ครบความยาว PIN owner/hr แล้วยังไม่ตรง → ผิด
-      const maxLen = Math.max(
-        configs.pin_owner?.length || 4,
-        configs.pin_hr?.length || 4
-      );
-      if (next.length >= maxLen) {
-        handleWrongPin();
-      }
-    }
+    if (next.length >= MIN_PIN_LEN) checkPin(next, false); // auto-check
   };
 
   const handleSubmit = (pinVal, role) => {
@@ -111,24 +102,14 @@ export default function LoginPage({ onLogin }) {
   // ─── รับ keyboard จริงด้วย ───────────────────────────────
   useEffect(() => {
     const handler = (e) => {
+      if (cooldown > 0 || loading) return;
       if (e.key >= "0" && e.key <= "9") handleKey(e.key);
       if (e.key === "Backspace") handleKey("del");
-      if (e.key === "Enter" && pin.length >= 4) {
-        // manual submit สำหรับ PIN 4+ หลักที่กด Enter
-        if (!configs) return;
-        const role =
-          pin === configs.pin_owner
-            ? "owner"
-            : pin === configs.pin_hr
-            ? "hr"
-            : null;
-        if (role) handleSubmit(pin, role);
-        else handleWrongPin();
-      }
+      if (e.key === "Enter" && pin.length >= MIN_PIN_LEN) checkPin(pin, true);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [pin, configs, cooldown, attempts]);
+  }, [pin, cooldown, attempts, loading]);
 
   // ─── UI ─────────────────────────────────────────────────
   const dots = Array.from({ length: 6 }, (_, i) => i < pin.length);
@@ -161,9 +142,6 @@ export default function LoginPage({ onLogin }) {
           <p style={styles.error}>
             {cooldown > 0 ? `⏳ ${error} (${cooldown}s)` : `⚠️ ${error}`}
           </p>
-        )}
-        {!configs && !error && (
-          <p style={styles.hint}>กำลังโหลด...</p>
         )}
 
         {/* Numpad */}
