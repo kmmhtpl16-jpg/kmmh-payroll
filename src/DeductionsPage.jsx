@@ -11,6 +11,10 @@ const toBE = (iso) => {
   return `${d}/${m}/${Number(y) + 543}`;
 };
 
+// ประเภทการแจ้งค่าเสียหาย
+const reportLabel = (r) =>
+  r === "self_reported" ? "🙋 แจ้งเอง" : r === "caught" ? "🔍 ถูกจับได้" : "—";
+
 const CYCLE_OPTIONS = [
   { value: "saturday",  label: "🗓 วันเสาร์",   desc: "หักรอบเสาร์ที่ตรงกับสัปดาห์นี้" },
   { value: "month_end", label: "📅 สิ้นเดือน",  desc: "หักตอนปิดงวดสิ้นเดือน" },
@@ -51,11 +55,19 @@ export default function DeductionsPage({ role }) {
   const [editVals,   setEditVals]   = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // ── รออนุมัติหักค่าเสียหาย (จากคลังของตำหนิ) ──
+  const [pendingCharges, setPendingCharges] = useState([]);
+  const [reviewRow,      setReviewRow]      = useState(null);   // row ที่กำลังตรวจ
+  const [reviewDecision, setReviewDecision] = useState("approve");
+  const [reviewPin,      setReviewPin]      = useState("");
+  const [reviewReason,   setReviewReason]   = useState("");
+  const [reviewSaving,   setReviewSaving]   = useState(false);
+
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     setLoading(true);
-    await Promise.all([loadEmployees(), loadTypes(), loadDeductions()]);
+    await Promise.all([loadEmployees(), loadTypes(), loadDeductions(), loadPendingCharges()]);
     setLoading(false);
   };
 
@@ -80,6 +92,13 @@ export default function DeductionsPage({ role }) {
       .order("deduct_date", { ascending: false })
       .limit(200);
     if (data) setDeductions(data);
+  };
+
+  // ── โหลดคิวรออนุมัติค่าเสียหาย จาก view ──
+  const loadPendingCharges = async () => {
+    const { data } = await supabase
+      .from("v_pending_damage_charges").select("*");
+    if (data) setPendingCharges(data);
   };
 
   // ── บันทึกรายจ่าย ──
@@ -151,6 +170,32 @@ export default function DeductionsPage({ role }) {
     loadDeductions();
   };
 
+  // ── เปิด modal อนุมัติ/ตีกลับ ค่าเสียหาย ──
+  const openReview = (row, decision) => {
+    setReviewRow(row);
+    setReviewDecision(decision);
+    setReviewPin("");
+    setReviewReason("");
+  };
+
+  // ── ยืนยันอนุมัติ/ตีกลับ ──
+  const doReview = async () => {
+    if (!reviewPin.trim()) { alert("กรุณาใส่รหัส HR"); return; }
+    setReviewSaving(true);
+    const { data, error } = await supabase.rpc("stock_hr_review_damage", {
+      p_item_id:  reviewRow.item_id,
+      p_decision: reviewDecision,
+      p_pin:      reviewPin.trim(),
+      p_reason:   reviewDecision === "reject" ? (reviewReason.trim() || null) : null,
+    });
+    setReviewSaving(false);
+    if (error) { alert("❌ " + error.message); return; }
+    if (!data || !data.ok) { alert("❌ " + (data?.error || "ทำรายการไม่สำเร็จ")); return; }
+    setReviewRow(null);
+    // อนุมัติแล้วยอดจะโผล่ในรายจ่ายค้างหัก จึงโหลดทั้งคิวและ deductions ใหม่
+    await Promise.all([loadPendingCharges(), loadDeductions()]);
+  };
+
   const canEdit = (row) => !row.is_paid || role === "owner";
 
   // 🔍 ค้นหา — กรองตามชื่อพนักงาน / ประเภท / หมายเหตุ
@@ -172,6 +217,39 @@ export default function DeductionsPage({ role }) {
 
   return (
     <div style={s.page}>
+
+      {/* ── 🟡 รออนุมัติหักค่าเสียหาย (จากคลังของตำหนิ) ── */}
+      {pendingCharges.length > 0 && (
+        <div style={{ ...s.card, border:"2px solid #f59e0b", background:"#fffbeb" }}>
+          <h3 style={{ ...s.cardTitle, color:"#b45309" }}>
+            🟡 รออนุมัติหักค่าเสียหาย ({pendingCharges.length}) — จากคลังของตำหนิ
+          </h3>
+          <p style={{ fontSize:12, color:"#92400e", margin:"0 0 12px" }}>
+            ตรวจสอบก่อนอนุมัติ — กด “อนุมัติ” แล้วยอดจะถูกบันทึกเข้ารายจ่าย (หักงวดสิ้นเดือน) ทันที
+          </p>
+          {pendingCharges.map(pc => (
+            <div key={pc.item_id} style={s.chargeRow}>
+              {pc.photo_urls?.[0] && (
+                <img src={pc.photo_urls[0]} alt="" style={s.chargeThumb} />
+              )}
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontWeight:700, fontSize:14 }}>
+                  {pc.employee_name || "—"}
+                  <span style={{ color:"#92400e", fontWeight:800 }}> · {fmt(pc.amount)} บาท</span>
+                </div>
+                <div style={{ fontSize:12, color:"#64748b" }}>
+                  {pc.code} {pc.name} · {reportLabel(pc.report_type)}
+                </div>
+                {pc.condition && <div style={{ fontSize:12, color:"#94a3b8" }}>🔧 {pc.condition}</div>}
+              </div>
+              <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                <button onClick={() => openReview(pc, "approve")} style={s.approveBtn}>✓ อนุมัติ</button>
+                <button onClick={() => openReview(pc, "reject")}  style={s.rejectBtn}>✕ ตีกลับ</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── ฟอร์มบันทึก ── */}
       <div style={s.card}>
@@ -416,6 +494,61 @@ export default function DeductionsPage({ role }) {
           </div>
         </div>
       )}
+
+      {/* ── Modal อนุมัติ/ตีกลับ ค่าเสียหาย ── */}
+      {reviewRow && (
+        <div style={s.modalOverlay} onClick={() => setReviewRow(null)}>
+          <div style={s.modal} onClick={e => e.stopPropagation()}>
+            <div style={{ ...s.modalHeader, background: reviewDecision === "approve" ? "#166534" : "#991b1b" }}>
+              <span style={{ fontWeight:700, color:"#fff" }}>
+                {reviewDecision === "approve" ? "✓ อนุมัติหักค่าเสียหาย" : "✕ ตีกลับค่าเสียหาย"}
+              </span>
+              <button onClick={() => setReviewRow(null)} style={s.closeBtn}>✕</button>
+            </div>
+            <div style={{ padding:16 }}>
+              <div style={{ marginBottom:12, fontSize:14 }}>
+                <div><b>{reviewRow.employee_name}</b> · {fmt(reviewRow.amount)} บาท</div>
+                <div style={{ color:"#64748b", fontSize:12 }}>
+                  {reviewRow.code} {reviewRow.name} · {reportLabel(reviewRow.report_type)}
+                </div>
+              </div>
+
+              {reviewDecision === "approve" && (
+                <p style={{ fontSize:12, color:"#166534", background:"#f0fdf4", padding:"8px 10px", borderRadius:8, margin:"0 0 12px" }}>
+                  อนุมัติแล้วจะบันทึกเข้ารายจ่ายของ {reviewRow.employee_name} (หักงวดสิ้นเดือน) ทันที
+                </p>
+              )}
+
+              {reviewDecision === "reject" && (
+                <div style={{ marginBottom:12 }}>
+                  <label style={s.label}>เหตุผลที่ตีกลับ (ถ้ามี)</label>
+                  <input type="text" value={reviewReason}
+                    onChange={e => setReviewReason(e.target.value)}
+                    placeholder="เช่น ยอดสูงเกิน / ไม่ใช่ความผิดพนักงาน"
+                    style={{ ...s.input, width:"100%" }} />
+                </div>
+              )}
+
+              <div style={{ marginBottom:16 }}>
+                <label style={s.label}>รหัส HR</label>
+                <input type="password" inputMode="numeric" value={reviewPin}
+                  onChange={e => setReviewPin(e.target.value)}
+                  placeholder="••••"
+                  style={{ ...s.input, width:"100%", letterSpacing:4, textAlign:"center" }}
+                  onKeyDown={e => e.key === "Enter" && doReview()} />
+              </div>
+
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doReview} disabled={reviewSaving}
+                  style={{ ...s.btn, ...(reviewDecision === "approve" ? s.btnApprove : s.btnReject), flex:1 }}>
+                  {reviewSaving ? "⏳" : (reviewDecision === "approve" ? "✓ ยืนยันอนุมัติ" : "✕ ยืนยันตีกลับ")}
+                </button>
+                <button onClick={() => setReviewRow(null)} style={s.btn}>ยกเลิก</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -460,6 +593,15 @@ const s = {
                background:"#fff", cursor:"pointer", fontSize:13 },
   deleteBtn: { padding:"4px 8px", borderRadius:6, border:"1px solid #fecaca",
                background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:13 },
+
+  // ── ค่าเสียหายรออนุมัติ ──
+  chargeRow:   { display:"flex", alignItems:"center", gap:10, padding:"10px 0", borderBottom:"1px solid #fde68a" },
+  chargeThumb: { width:46, height:46, borderRadius:8, objectFit:"cover", flexShrink:0, background:"#fef3c7" },
+  approveBtn:  { padding:"6px 12px", borderRadius:8, border:"none", background:"#16a34a", color:"#fff", cursor:"pointer", fontWeight:700, fontSize:13 },
+  rejectBtn:   { padding:"6px 12px", borderRadius:8, border:"1px solid #fca5a5", background:"#fff", color:"#dc2626", cursor:"pointer", fontWeight:700, fontSize:13 },
+  btnApprove:  { background:"#16a34a", color:"#fff", border:"none" },
+  btnReject:   { background:"#dc2626", color:"#fff", border:"none" },
+
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.45)",
                   display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 },
   modal:     { background:"#fff", borderRadius:16, width:400, maxWidth:"92vw",
