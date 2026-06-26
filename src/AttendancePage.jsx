@@ -758,6 +758,7 @@ const s = {
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.45)",
     display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 },
   modal: { background:"#fff", borderRadius:16, width:440, maxWidth:"92vw",
+    maxHeight:"90vh", overflowY:"auto", WebkitOverflowScrolling:"touch",
     boxShadow:"0 20px 60px rgba(0,0,0,0.3)" },
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
     padding:"14px 16px", background:"#1e3a5f", borderRadius:"16px 16px 0 0" },
