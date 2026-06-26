@@ -9,14 +9,28 @@ import ImportConflictModal from "./ImportConflictModal";
 // fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
 // fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
 const HR_NOTE_PRESETS = [
-  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true, leaveType: "sick" },
-  { label: "ลากิจ", value: "ลากิจ", fullDay: true, leaveType: "personal" },
-  { label: "ลาป่วยครึ่งวัน", value: "ลาป่วยครึ่งวัน", fullDay: false, leaveType: "sick", half: true },
-  { label: "ลากิจครึ่งวัน", value: "ลากิจครึ่งวัน", fullDay: false, leaveType: "personal", half: true },
-  { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false },
-  { label: "ขาดงาน", value: "ขาดงาน", fullDay: true },
-  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true }, { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false },
-  { label: "ติดส่งสินค้า", value: "ติดส่งสินค้า", fullDay: false, deliveryDuty: true },
+  // 🟢 จ่ายเต็มวัน — กดแล้วบันทึกได้เลย ไม่ต้องกรอกเวลา
+  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true, leaveType: "sick", cat: "paid" },
+  { label: "ลากิจ", value: "ลากิจ", fullDay: true, leaveType: "personal", cat: "paid" },
+  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true, cat: "paid" },
+  // 🔵 ลาครึ่งวัน — กรอกครึ่งที่มาทำงาน แล้วบันทึก
+  { label: "ลาป่วยครึ่งวัน", value: "ลาป่วยครึ่งวัน", fullDay: false, leaveType: "sick", half: true, cat: "half" },
+  { label: "ลากิจครึ่งวัน", value: "ลากิจครึ่งวัน", fullDay: false, leaveType: "personal", half: true, cat: "half" },
+  // 🔴 หักเงิน
+  { label: "ขาดงาน", value: "ขาดงาน", fullDay: true, cat: "deduct" },
+  { label: "ขาดงานครึ่งวัน", value: "ขาดงานครึ่งวัน", halfAbsent: true, cat: "deduct" },
+  { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false, cat: "deduct" },
+  // 🟠 อื่นๆ
+  { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false, cat: "other" },
+  { label: "ติดส่งสินค้า", value: "ติดส่งสินค้า", fullDay: false, deliveryDuty: true, cat: "other" },
+];
+
+// กลุ่มปุ่ม (เรียงเป็นแถว/คอลัมน์ให้อ่านง่าย — สีเดียวกัน = ผลต่อเงินเหมือนกัน)
+const PRESET_GROUPS = [
+  { key: "paid",   title: "🟢 ลา–จ่ายเต็มวัน",  hint: "กดแล้วกดบันทึกได้เลย ไม่ต้องกรอกเวลา" },
+  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก" },
+  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง · ออกระหว่างวัน=ใส่ช่องหักเพิ่ม" },
+  { key: "other",  title: "🟠 อื่นๆ",            hint: "" },
 ];
 
 function processAttendance(rows, employees) {
@@ -148,6 +162,12 @@ export default function AttendancePage({ role }) {
     const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
     const isFullDayAbsence = !!fullDayNote;
 
+    // 🆕 ขาดงานครึ่งวัน → ไม่มาทำงานครึ่งวัน กดปุ่มเดียวจบ (ล้างเวลา) ระบบหักครึ่งค่าแรงตอนคำนวณเงินเดือน
+    const halfAbsentPreset = HR_NOTE_PRESETS.find(p => p.halfAbsent && p.value === editValues.hr_note);
+    const isHalfAbsent = !!halfAbsentPreset;
+    // ล้างเวลา (ไม่มาทำงาน) สำหรับ ลา/ขาดทั้งวัน และ ขาดงานครึ่งวัน
+    const clearTimes = isFullDayAbsence || isHalfAbsent;
+
     // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
     //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
     const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
@@ -161,18 +181,18 @@ export default function AttendancePage({ role }) {
 
     const allFilled = amFilled && pmFilled;
     // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
-    const isDone = allFilled || isFullDayAbsence || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty;
+    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty;
 
     const { error } = await supabase
       .from("attendance_logs")
       .update({
         // ลา/ขาดทั้งวัน = ไม่มาทำงาน → ล้างเวลา + สาย/OT เป็น 0
-        scan_am_in: isFullDayAbsence ? null : (am_in || null),
-        scan_am_out: isFullDayAbsence ? null : (am_out || null),
-        scan_pm_in: isFullDayAbsence ? null : (pm_in || null),
-        scan_pm_out: isFullDayAbsence ? null : (pm_out || null),
-        late_minutes: isFullDayAbsence ? 0 : lateMin,
-        ot_hours: isFullDayAbsence ? 0 : otHours,
+        scan_am_in: clearTimes ? null : (am_in || null),
+        scan_am_out: clearTimes ? null : (am_out || null),
+        scan_pm_in: clearTimes ? null : (pm_in || null),
+        scan_pm_out: clearTimes ? null : (pm_out || null),
+        late_minutes: clearTimes ? 0 : lateMin,
+        ot_hours: clearTimes ? 0 : otHours,
         hr_note: editValues.hr_note || null,
         hr_extra_deduct: parseFloat(editValues.hr_extra_deduct) || 0,
         hr_extra_note: editValues.hr_extra_note || null,
@@ -227,6 +247,8 @@ export default function AttendancePage({ role }) {
       }
       const doneText = isFullDayAbsence
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
+        : isHalfAbsent
+        ? " — ขาดงานครึ่งวัน ปลด 🟡 แล้ว (หักครึ่งค่าแรงให้อัตโนมัติ)"
         : (isHalfDayLeave && isDone)
         ? ` — ${editValues.hr_note} ปลด 🟡 แล้ว (จ่ายเต็มวัน · ลงหน้าการลาแล้ว)`
         : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
@@ -569,29 +591,47 @@ export default function AttendancePage({ role }) {
               <div style={{ marginBottom:8 }}>
                 <label style={{ display:"block", fontSize:12, color:"#64748b",
                   fontWeight:600, marginBottom:6 }}>หมายเหตุ HR</label>
-                <p style={{ margin:"0 0 8px", fontSize:11, color:"#166534",
-                  background:"#f0fdf4", padding:"4px 8px", borderRadius:6,
-                  border:"1px solid #bbf7d0" }}>
-                  💡 ปุ่มสีเขียว (ลา/ขาด/วันหยุด ทั้งวัน) — กดแล้วกด "บันทึก" ได้เลย ไม่ต้องกรอกเวลา
-                  <br />🔵 ลาป่วย/ลากิจครึ่งวัน — กรอกครึ่งที่มาทำงานก็กด "บันทึก" ได้ จ่ายเต็มวัน + ลงหน้าการลาให้เอง
-                  <br />🚚 ติดส่งสินค้า — มีแค่เข้าเช้า กดปุ่มเดียวจบ จ่ายเต็มวัน แต่ยังหักสายเช้า
+                <p style={{ margin:"0 0 10px", fontSize:11, color:"#475569",
+                  background:"#f8fafc", padding:"6px 8px", borderRadius:6,
+                  border:"1px solid #e2e8f0" }}>
+                  💡 เลือกปุ่มตามกลุ่ม — สีเดียวกัน = ผลต่อเงินเหมือนกัน
                 </p>
-                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
-                  {HR_NOTE_PRESETS.map(p => {
-                    const isActive = editValues.hr_note === p.value;
-                    return (
-                      <button key={p.value}
-                        onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
-                        style={{
-                          ...s.presetBtn,
-                          ...(p.fullDay ? s.presetBtnFullDay : {}),
-                          ...(isActive ? (p.fullDay ? s.presetBtnFullDayActive : s.presetBtnActive) : {}),
-                        }}>
-                        {p.fullDay ? "🟢 " : p.half ? "🔵 " : p.deliveryDuty ? "🚚 " : ""}{p.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                {PRESET_GROUPS.map(g => {
+                  const items = HR_NOTE_PRESETS.filter(p => p.cat === g.key);
+                  if (items.length === 0) return null;
+                  const catStyle = {
+                    paid:   [s.presetBtnFullDay, s.presetBtnFullDayActive],
+                    half:   [s.presetBtnHalf,    s.presetBtnHalfActive],
+                    deduct: [s.presetBtnDeduct,  s.presetBtnDeductActive],
+                    other:  [s.presetBtnOther,   s.presetBtnOtherActive],
+                  }[g.key] || [{}, s.presetBtnActive];
+                  const icon = { paid:"🟢 ", half:"🔵 ", deduct:"🔴 ", other:"🟠 " }[g.key] || "";
+                  return (
+                    <div key={g.key} style={{ marginBottom:10 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:5 }}>
+                        {g.title}
+                        {g.hint && <span style={{ fontWeight:400, color:"#94a3b8" }}> · {g.hint}</span>}
+                      </div>
+                      <div style={{ display:"grid",
+                        gridTemplateColumns:"repeat(auto-fit, minmax(108px, 1fr))", gap:6 }}>
+                        {items.map(p => {
+                          const isActive = editValues.hr_note === p.value;
+                          return (
+                            <button key={p.value}
+                              onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
+                              style={{
+                                ...s.presetBtn, textAlign:"center", borderRadius:10,
+                                ...catStyle[0],
+                                ...(isActive ? catStyle[1] : {}),
+                              }}>
+                              {p.deliveryDuty ? "🚚 " : icon}{p.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
                 <input type="text" value={editValues.hr_note}
                   onChange={e => setEditValues(p => ({ ...p, hr_note: e.target.value }))}
                   placeholder="หรือพิมพ์เองได้"
@@ -738,5 +778,26 @@ const s = {
   },
   presetBtnFullDayActive: {
     background:"#16a34a", borderColor:"#16a34a", color:"#fff",
+  },
+  // ── 🔵 ลาครึ่งวัน ──
+  presetBtnHalf: {
+    borderColor:"#bfdbfe", color:"#1e40af", background:"#eff6ff",
+  },
+  presetBtnHalfActive: {
+    background:"#2563eb", borderColor:"#2563eb", color:"#fff",
+  },
+  // ── 🔴 หักเงิน ──
+  presetBtnDeduct: {
+    borderColor:"#fecaca", color:"#b91c1c", background:"#fef2f2",
+  },
+  presetBtnDeductActive: {
+    background:"#dc2626", borderColor:"#dc2626", color:"#fff",
+  },
+  // ── 🟠 อื่นๆ ──
+  presetBtnOther: {
+    borderColor:"#fed7aa", color:"#9a3412", background:"#fff7ed",
+  },
+  presetBtnOtherActive: {
+    background:"#ea580c", borderColor:"#ea580c", color:"#fff",
   },
 };

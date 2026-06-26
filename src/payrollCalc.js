@@ -279,15 +279,18 @@ export async function calcPayroll(year, month) {
 
       if (isSunday(log.work_date)) continue;
 
-      // 🆕 ขาดงาน → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
-      if (log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
+      // 🆕 ขาดงานครึ่งวัน → หักครึ่งค่าแรง (นับ 0.5 วัน) — ต้องเช็คก่อน /ขาด/ เต็มวัน
+      const isHalfAbsent = log.hr_note && /ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(log.hr_note);
+      // 🆕 ขาดงาน(เต็มวัน) → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
+      if (!isHalfAbsent && log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
 
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
 
       // 🆕 v7.8 — ลาครึ่งวัน: ทำงานเช้า ลาบ่าย → นับ 0.5 วัน จ่ายครึ่งวัน (ครึ่งที่ลาไม่จ่าย)
-      const isHalfDay = log.hr_note && /ลาครึ่งวัน/.test(log.hr_note);
+      //         + ขาดงานครึ่งวัน → หักครึ่งค่าแรงเหมือนกัน (นับ 0.5 วัน)
+      const isHalfDay = isHalfAbsent || (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note));
       const dayFactor = isHalfDay ? 0.5 : 1;
 
       work_days += dayFactor;
@@ -304,7 +307,7 @@ export async function calcPayroll(year, month) {
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
-      if (isHalfDay) leave_days += 0.5;
+      if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) leave_days += 0.5; // นับเฉพาะ "ลา" จริง (ไม่นับขาดงานครึ่งวัน)
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
     }
 
