@@ -550,12 +550,12 @@ export default function AttendancePage({ role }) {
               </span>
               <button onClick={() => setEditRow(null)} style={s.closeBtn}>✕</button>
             </div>
-            <div style={{ padding:16 }}>
-              <p style={{ margin:"0 0 12px", fontSize:13, color:"#64748b" }}>
+            <div style={{ padding:"12px 14px" }}>
+              <p style={{ margin:"0 0 8px", fontSize:12, color:"#64748b" }}>
                 กรอกเวลาให้ครบ 4 จุด → ระบบคำนวณสาย/OT ใหม่ + ปลด 🟡 อัตโนมัติ
               </p>
 
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
                 {[
                   ["scan_am_in", "🕐 เข้าเช้า"],
                   ["scan_am_out", "🍱 พักออก"],
@@ -564,7 +564,7 @@ export default function AttendancePage({ role }) {
                 ].map(([key, label]) => (
                   <div key={key}>
                     <label style={{ display:"block", fontSize:12, color:"#64748b",
-                      fontWeight:600, marginBottom:4 }}>{label}</label>
+                      fontWeight:600, marginBottom:2 }}>{label}</label>
                     <input
                       type="text"
                       inputMode="numeric"
@@ -577,10 +577,10 @@ export default function AttendancePage({ role }) {
                         setEditValues(p => ({ ...p, [key]: v }));
                       }}
                       style={{
-                        width:"100%", padding:"10px", boxSizing:"border-box",
+                        width:"100%", padding:"7px", boxSizing:"border-box",
                         border:`2px solid ${editValues[key]?.length===5?"#86efac":"#fca5a5"}`,
-                        borderRadius:8, fontSize:18, textAlign:"center",
-                        letterSpacing:2, fontWeight:700,
+                        borderRadius:8, fontSize:16, textAlign:"center",
+                        letterSpacing:1, fontWeight:700,
                       }}
                     />
                   </div>
@@ -590,9 +590,9 @@ export default function AttendancePage({ role }) {
               {/* ── ปุ่ม preset หมายเหตุ HR ── */}
               <div style={{ marginBottom:8 }}>
                 <label style={{ display:"block", fontSize:12, color:"#64748b",
-                  fontWeight:600, marginBottom:6 }}>หมายเหตุ HR</label>
-                <p style={{ margin:"0 0 10px", fontSize:11, color:"#475569",
-                  background:"#f8fafc", padding:"6px 8px", borderRadius:6,
+                  fontWeight:600, marginBottom:3 }}>หมายเหตุ HR</label>
+                <p style={{ margin:"0 0 6px", fontSize:11, color:"#475569",
+                  background:"#f8fafc", padding:"4px 8px", borderRadius:6,
                   border:"1px solid #e2e8f0" }}>
                   💡 เลือกปุ่มตามกลุ่ม — สีเดียวกัน = ผลต่อเงินเหมือนกัน
                 </p>
@@ -607,13 +607,13 @@ export default function AttendancePage({ role }) {
                   }[g.key] || [{}, s.presetBtnActive];
                   const icon = { paid:"🟢 ", half:"🔵 ", deduct:"🔴 ", other:"🟠 " }[g.key] || "";
                   return (
-                    <div key={g.key} style={{ marginBottom:10 }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:5 }}>
+                    <div key={g.key} style={{ marginBottom:6 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:3 }}>
                         {g.title}
                         {g.hint && <span style={{ fontWeight:400, color:"#94a3b8" }}> · {g.hint}</span>}
                       </div>
                       <div style={{ display:"grid",
-                        gridTemplateColumns:"repeat(auto-fit, minmax(108px, 1fr))", gap:6 }}>
+                        gridTemplateColumns:"repeat(auto-fit, minmax(100px, 1fr))", gap:5 }}>
                         {items.map(p => {
                           const isActive = editValues.hr_note === p.value;
                           return (
@@ -640,7 +640,7 @@ export default function AttendancePage({ role }) {
               </div>
 
               {/* ── ช่องหักเพิ่ม (ออกระหว่างวัน / ลารายชั่วโมง) ── */}
-              <div style={{ marginBottom:12, padding:"10px 12px",
+              <div style={{ marginBottom:8, padding:"8px 10px",
                 background:"#fafafa", borderRadius:8, border:"1px solid #e2e8f0" }}>
                 <label style={{ display:"block", fontSize:12, color:"#64748b",
                   fontWeight:600, marginBottom:2 }}>💸 หักเพิ่ม (บาท)</label>
@@ -684,7 +684,8 @@ export default function AttendancePage({ role }) {
                 </div>
               )}
 
-              <div style={{ display:"flex", gap:8 }}>
+              <div style={{ display:"flex", gap:8, position:"sticky", bottom:0,
+                background:"#fff", paddingTop:8, marginTop:4, borderTop:"1px solid #f1f5f9" }}>
                 <button onClick={saveEdit} disabled={savingEdit}
                   style={{ flex:1, padding:12, borderRadius:10, border:"none",
                     background:"#2563eb", color:"#fff", fontWeight:700,
@@ -761,12 +762,13 @@ const s = {
     maxHeight:"90vh", overflowY:"auto", WebkitOverflowScrolling:"touch",
     boxShadow:"0 20px 60px rgba(0,0,0,0.3)" },
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center",
-    padding:"14px 16px", background:"#1e3a5f", borderRadius:"16px 16px 0 0" },
+    padding:"10px 14px", background:"#1e3a5f", borderRadius:"16px 16px 0 0",
+    position:"sticky", top:0, zIndex:3 },
   closeBtn: { background:"none", border:"none", color:"#fff", fontSize:20, cursor:"pointer", lineHeight:1 },
 
   // ── preset buttons ──
   presetBtn: {
-    padding:"5px 12px", borderRadius:20, border:"1.5px solid #e2e8f0",
+    padding:"5px 8px", borderRadius:20, border:"1.5px solid #e2e8f0",
     background:"#f8fafc", cursor:"pointer", fontSize:13, fontWeight:600,
     color:"#475569", transition:"all 0.15s",
   },
