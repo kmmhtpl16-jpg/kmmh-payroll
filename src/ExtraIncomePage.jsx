@@ -57,6 +57,7 @@ export default function ExtraIncomePage({ role }) {
   const [periodId,  setPeriodId]  = useState("");
   const [employees, setEmployees] = useState([]);
   const [entries,   setEntries]   = useState([]); // รายการทุกคนในงวด
+  const [proposals, setProposals] = useState([]); // ข้อเสนอค่าเที่ยวจากระบบจัดส่ง (รอตรวจ)
   const [loading,   setLoading]   = useState(false);
   const [query,     setQuery]     = useState("");   // 🔍 ค้นหา (ชื่อ/ประเภท/โน้ต)
 
@@ -111,6 +112,7 @@ export default function ExtraIncomePage({ role }) {
   useEffect(() => {
     if (!periodId) return;
     loadEntries();
+    loadProposals();
     (async () => {
       const { data: cyc } = await supabase
         .from("pay_cycles")
@@ -132,6 +134,44 @@ export default function ExtraIncomePage({ role }) {
       .order("created_at", { ascending: false });
     setEntries(data || []);
     setLoading(false);
+  }
+
+  // ── โหลดข้อเสนอค่าเที่ยวจากระบบจัดส่ง (สถานะ pending) ──
+  async function loadProposals() {
+    const { data } = await supabase
+      .from("trip_pay_proposals")
+      .select("*")
+      .eq("period_id", periodId)
+      .eq("status", "pending")
+      .order("amount", { ascending: false });
+    setProposals(data || []);
+  }
+
+  // ใช้ยอดข้อเสนอ → เติมลงฟอร์ม (HR ตรวจแล้วค่อยกดบันทึกเอง ไม่ลงอัตโนมัติ)
+  function usePropose(p) {
+    setForm((f) => ({
+      ...f,
+      employee_id: p.employee_id,
+      income_type: "other",
+      label: "ค่าเที่ยวจัดส่ง",
+      amount: String(p.amount),
+      note: `${p.trips} เที่ยว (จากระบบจัดส่ง)`,
+      disburse_on: "month_end",
+      _systemAmount: null,
+    }));
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    flash("เติมยอดในฟอร์มแล้ว — ตรวจสอบก่อนกดบันทึก");
+  }
+
+  // ทำเครื่องหมายว่าตรวจแล้ว → ซ่อนแถบเตือนของคนนี้
+  async function reviewProposal(p) {
+    if (!confirm("ทำเครื่องหมายว่าตรวจแล้ว? แถบเตือนของคนนี้จะหายไป")) return;
+    const { error } = await supabase
+      .from("trip_pay_proposals")
+      .update({ status: "reviewed", updated_at: new Date().toISOString() })
+      .eq("id", p.id);
+    if (error) return flash("อัปเดตไม่สำเร็จ: " + error.message, "err");
+    loadProposals();
   }
 
   // ── ดึงยอด OT จากระบบเมื่อเลือกคน ──
@@ -393,6 +433,28 @@ export default function ExtraIncomePage({ role }) {
         </div>
       )}
 
+      {/* ── 📨 ข้อเสนอค่าเที่ยวจากระบบจัดส่ง (รอตรวจ) ── */}
+      {proposals.length > 0 && (
+        <div style={S.proposeCard}>
+          <div style={S.proposeHead}>📨 ค่าเที่ยวจากระบบจัดส่ง — ตรวจสอบก่อนกรอกยอดจริง</div>
+          {proposals.map((p) => (
+            <div key={p.id} style={S.proposeRow}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>{p.nickname || empMap[p.employee_id]?.nickname || "—"}</div>
+                <div style={S.proposeSub}>ส่งยอดมา <b style={{ color: GREEN_DARK }}>{fmt(p.amount)}</b> บาท · {p.trips} เที่ยว</div>
+              </div>
+              {canEdit && (
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button style={S.useBtn} onClick={() => usePropose(p)}>ใช้ยอดนี้</button>
+                  <button style={S.dismissBtn} onClick={() => reviewProposal(p)} title="ตรวจแล้ว">✓</button>
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={S.proposeFoot}>ℹ️ ยอดนี้เป็นแค่ข้อเสนอ ระบบยังไม่ลงเงินให้ — กด "ใช้ยอดนี้" เพื่อเติมลงฟอร์มแล้วตรวจก่อนบันทึก</div>
+        </div>
+      )}
+
       {/* ── รายการในงวด (จัดกลุ่มตามคน) ── */}
       <h3 style={S.listTitle}>💰 รายได้พิเศษในงวดนี้</h3>
 
@@ -500,5 +562,12 @@ const S = {
   editInput: { padding: "0.4rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.85rem" },
   miniSave: { border: "none", background: GREEN, color: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
   miniCancel: { border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
+  proposeCard: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "0.9rem 1rem", marginBottom: 18 },
+  proposeHead: { fontWeight: 700, color: "#1d4ed8", fontSize: "0.95rem", marginBottom: 10 },
+  proposeRow: { display: "flex", alignItems: "center", gap: 8, padding: "0.5rem 0", borderTop: "1px solid #dbeafe" },
+  proposeSub: { fontSize: "0.82rem", color: "#475569", marginTop: 2 },
+  useBtn: { border: "none", background: "#2563eb", color: "#fff", borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: "0.85rem", fontWeight: 600 },
+  dismissBtn: { border: "1px solid #cbd5e1", background: "#fff", color: "#475569", borderRadius: 7, padding: "6px 10px", cursor: "pointer" },
+  proposeFoot: { fontSize: "0.75rem", color: "#64748b", marginTop: 10, lineHeight: 1.5 },
   toast: { position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", padding: "0.6rem 1.2rem", borderRadius: 8, color: "#fff", fontSize: "0.9rem", zIndex: 1000, boxShadow: "0 2px 8px rgba(0,0,0,0.15)" },
 };
