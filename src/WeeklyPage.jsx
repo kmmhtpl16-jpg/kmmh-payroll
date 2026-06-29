@@ -156,7 +156,7 @@ export default function WeeklyPage({ role }) {
 
       const { data: ei } = await supabase
         .from("extra_income_entries")
-        .select("employee_id, amount, disburse_on, cycle_id, income_type")
+        .select("employee_id, amount, disburse_on, cycle_id, income_type, label, amount_note")
         .eq("period_id", per.id);
       setExtraIncome(ei || []);
 
@@ -257,6 +257,18 @@ export default function WeeklyPage({ role }) {
     extraAssign[e.employee_id][key] = (extraAssign[e.employee_id][key] || 0) + Number(e.amount || 0);
   }
 
+  // รายการรายได้พิเศษ "อื่นๆ" รายบรรทัด (เช่น ค่าเที่ยว + ช่วงเวลา) — โชว์เป็นมินิเซกชันในสลิป
+  const otherItemsByEmp = {}; // empId → [{label, amount, disburse_on}]
+  for (const e of extraIncome) {
+    if (e.income_type !== "other") continue;
+    if (!otherItemsByEmp[e.employee_id]) otherItemsByEmp[e.employee_id] = [];
+    otherItemsByEmp[e.employee_id].push({
+      label: e.label || "รายได้อื่นๆ",
+      amount: Number(e.amount || 0),
+      disburse_on: e.disburse_on || "month_end",
+    });
+  }
+
   const allNetTotal      = payrolls.reduce((s,r) => s + (r.net_pay ?? (r.total_income||0)-(r.total_deduct||0)), 0);
   const allSaturdayTotal = payrolls.reduce((s,r) => s + getEmpSaturdayTotal(r), 0);
   const monthEndTotal    = payrolls.reduce((s,r) => s + getMonthEndPay(r), 0);
@@ -272,6 +284,7 @@ export default function WeeklyPage({ role }) {
       work_days:   row.workDays, wage: row.wage,
       ot:          row.extra || 0,
       advance:     row.advAmt,  to_pay: row.toPay,
+      income_items: row.income_items || [],
     }));
   }
   function genVoucherNo(cycleKey, existingCount) {
@@ -368,6 +381,12 @@ export default function WeeklyPage({ role }) {
     const esc   = (str) => String(str==null?"":str).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
 
     function slipRows(l) {
+      const incItems = (l.income_items || []).filter(it => Number(it.amount) > 0);
+      const extraSection = incItems.length
+        ? `<div class="line"></div>
+           <div class="mini-h">รายได้พิเศษเดือนนี้ (รวมในยอดสุทธิแล้ว)</div>
+           ${incItems.map(it => `<div class="row mini"><span>${esc(it.label)}</span><span class="green">${money(it.amount)}</span></div>`).join("")}`
+        : "";
       if (isMonthEnd) {
         const sat = Number(l.advance||0);
         const net = sat + Number(l.to_pay||0);
@@ -383,7 +402,8 @@ export default function WeeklyPage({ role }) {
           ${rfNote}
           <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
           <div class="line"></div>
-          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>`;
+          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>
+          ${extraSection}`;
       }
       const ot  = Number(l.ot||0);
       const adv = Number(l.advance||0);
@@ -392,7 +412,8 @@ export default function WeeklyPage({ role }) {
         ${ot  > 0 ? `<div class="row"><span>OT / รายได้อื่นๆ</span><span class="green">${money(ot)}</span></div>` : ""}
         ${adv > 0 ? `<div class="row"><span>เบิกในรอบ</span><span class="red">(${money(adv)})</span></div>` : ""}
         <div class="line"></div>
-        <div class="row total"><span>จ่ายจริง</span><span>${money(l.to_pay)}</span></div>`;
+        <div class="row total"><span>จ่ายจริง</span><span>${money(l.to_pay)}</span></div>
+        ${extraSection}`;
     }
 
     function slipHtml(l) {
@@ -452,6 +473,8 @@ export default function WeeklyPage({ role }) {
         .red { color:#b91c1c; }
         .line { border-top:1px solid #e2e8f0; margin:1.5mm 0; }
         .total { font-size:17px; font-weight:800; color:#1e3a5f; padding-top:2mm; }
+        .mini-h { font-size:11px; color:#64748b; font-weight:700; margin:1mm 0 0.5mm; }
+        .row.mini { font-size:12px; padding:1.2mm 0; }
         .sign { margin-top:10mm; text-align:right; }
         .sigline { border-bottom:1px solid #1e293b; width:60mm; margin-left:auto; }
         .siglabel { font-size:12px; color:#64748b; margin-top:1.5mm; }
@@ -606,6 +629,7 @@ export default function WeeklyPage({ role }) {
         const meRows    = sortByEmpCode(payrolls).map(r => ({
           record: r, workDays:0, wage:0, extra:0,
           advAmt: getEmpSaturdayTotal(r), advItems: [],
+          income_items: (otherItemsByEmp[r.employee_id] || []).filter(it => it.disburse_on !== "saturday"),
           toPay:  getMonthEndPay(r),
         }));
         const voucherMe  = vouchers["month_end"];

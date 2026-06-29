@@ -220,8 +220,15 @@ export default function PayrollPage({ role }) {
                 ["OT",                `${detail.ot_hours} ชม. = +${fmt(detail.ot_amount)}`],
                 ["เงินประจำตำแหน่ง",  `+${fmt(detail.position_allowance)}`],
                 ["เบี้ยขยัน",         `+${fmt(detail.diligence_bonus)}`],
-                ["รายได้อื่นๆ",       `+${fmt(detail.other_income)}`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} />)}
+              {/* รายได้อื่นๆ — แตกเป็นบรรทัดย่อย (เช่น ค่าเที่ยว + ช่วงเวลา) ถ้ามี */}
+              {detail.other_income_items?.length > 0
+                ? detail.other_income_items.map((it, i) => (
+                    <Row key={"oi" + i} label={it.label || "รายได้อื่นๆ"} value={`+${fmt(it.amount)}`} />
+                  ))
+                : detail.other_income > 0 && (
+                    <Row label="รายได้อื่นๆ" value={`+${fmt(detail.other_income)}`} />
+                  )}
               {detail.insurance_refund > 0 && (
                 <Row label="คืนค่าประกันงาน" value={`+${fmt(detail.insurance_refund)}`} green />
               )}

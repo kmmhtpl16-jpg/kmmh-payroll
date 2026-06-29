@@ -147,15 +147,29 @@ export default function ExtraIncomePage({ role }) {
     setProposals(data || []);
   }
 
+  // ── ช่วงเวลา (ระยะเวลา) จาก proposal → "1–25 มิ.ย. 69" (พ.ศ., ย่อ) ──
+  function cycleRangeBE(detail) {
+    const c = detail?.cycle;
+    if (!c?.start || !c?.end) return "";
+    const M = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+    const [sy, sm, sd] = c.start.split("-").map(Number);
+    const [ey, em, ed] = c.end.split("-").map(Number);
+    const beY = (ey + 543) % 100;
+    // เดือนเดียวกัน → "1–25 มิ.ย. 69" ; ต่างเดือน → "26 พ.ค.–25 มิ.ย. 69"
+    if (sm === em && sy === ey) return `${sd}–${ed} ${M[em]} ${beY}`;
+    return `${sd} ${M[sm]}–${ed} ${M[em]} ${beY}`;
+  }
+
   // ใช้ยอดข้อเสนอ → เติมลงฟอร์ม (HR ตรวจแล้วค่อยกดบันทึกเอง ไม่ลงอัตโนมัติ)
   function usePropose(p) {
+    const range = cycleRangeBE(p.detail);
     setForm((f) => ({
       ...f,
       employee_id: p.employee_id,
       income_type: "other",
-      label: "ค่าเที่ยวจัดส่ง",
+      label: range ? `ค่าเที่ยว (${range})` : "ค่าเที่ยว",
       amount: String(p.amount),
-      note: `${p.trips} เที่ยว (จากระบบจัดส่ง)`,
+      note: range ? `${p.trips} เที่ยว · ${range}` : `${p.trips} เที่ยว`,
       disburse_on: "month_end",
       _systemAmount: null,
     }));

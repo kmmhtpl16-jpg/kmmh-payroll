@@ -215,18 +215,26 @@ export async function calcPayroll(year, month) {
 
   // 🔧 v7.4 [#7] เลิกดึง advance_requests — เบิกอ่านจาก deductions ที่เดียว (ดู advance_total ด้านล่าง)
 
-  // ── ดึงรายได้ "อื่นๆ" จาก extra_income (โบนัส/ค่าพาหนะ ฯลฯ) ──
+  // ── ดึงรายได้ "อื่นๆ" จาก extra_income (โบนัส/ค่าพาหนะ/ค่าเที่ยว ฯลฯ) ──
+  //   เก็บทั้งยอดรวม (otherIncomeMap) และรายบรรทัด (otherItemsMap) เพื่อโชว์แยกในสลิป
   const otherIncomeMap = {};
+  const otherItemsMap  = {};
   const { data: period0 } = await supabase
     .from("pay_periods").select("id").eq("year", year).eq("month", month).maybeSingle();
   if (period0) {
     const { data: extraOther } = await supabase
       .from("extra_income_entries")
-      .select("employee_id, amount")
+      .select("employee_id, amount, label, amount_note")
       .eq("period_id", period0.id)
       .eq("income_type", "other");
     (extraOther || []).forEach(e => {
       otherIncomeMap[e.employee_id] = (otherIncomeMap[e.employee_id] || 0) + Number(e.amount || 0);
+      if (!otherItemsMap[e.employee_id]) otherItemsMap[e.employee_id] = [];
+      otherItemsMap[e.employee_id].push({
+        label: e.label || "รายได้อื่นๆ",
+        amount: Number(e.amount || 0),
+        note: e.amount_note || null,
+      });
     });
   }
 
@@ -379,6 +387,7 @@ export async function calcPayroll(year, month) {
     const advance_total  = parseFloat(deduct_advance.toFixed(2));
 
     const other_income = parseFloat((otherIncomeMap[emp.id] || 0).toFixed(2));
+    const other_income_items = otherItemsMap[emp.id] || [];
 
     const total_income = parseFloat((
       base_wage + holiday_wage + ot_amount + position_allowance +
@@ -412,6 +421,7 @@ export async function calcPayroll(year, month) {
       position_allowance,
       diligence_bonus,
       other_income,
+      other_income_items,
       late_minutes,
       late_deduct:       parseFloat(late_deduct.toFixed(2)),
       leave_days:        parseFloat(leave_days.toFixed(2)),
