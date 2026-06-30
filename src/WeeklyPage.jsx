@@ -116,6 +116,9 @@ export default function WeeklyPage({ role }) {
   const [approving,    setApproving]    = useState(null);
   const [returnModal,  setReturnModal]  = useState(null);
   const [printModal,   setPrintModal]   = useState(null);   // { voucher, selected:Set<employee_id> }
+  const [insBal,       setInsBal]       = useState({});     // employee_id -> ประกันงานสะสม
+  const [leaveSum,     setLeaveSum]     = useState({});     // employee_id -> v_leave_balance_summary row
+  const [leaveMonth,   setLeaveMonth]   = useState({});     // employee_id -> {sick:{days,dates}, personal:{days,dates}}
   const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
@@ -172,6 +175,29 @@ export default function WeeklyPage({ role }) {
       const vMap = {};
       for (const v of (vList || [])) vMap[v.cycle_date || "month_end"] = v;
       setVouchers(vMap);
+
+      // 🔧 v7: ประกันงานสะสม + สิทธิ์ลา (สำหรับสลิปสิ้นเดือน)
+      const { data: insb } = await supabase
+        .from("v_insurance_balance").select("employee_id, balance").in("employee_id", empIds);
+      const ibMap = {}; (insb || []).forEach(r => { ibMap[r.employee_id] = Number(r.balance || 0); });
+      setInsBal(ibMap);
+
+      const { data: lsum } = await supabase
+        .from("v_leave_balance_summary").select("*").eq("year", year).in("employee_id", empIds);
+      const lsMap = {}; (lsum || []).forEach(r => { lsMap[r.employee_id] = r; });
+      setLeaveSum(lsMap);
+
+      const { data: lreq } = await supabase
+        .from("leave_requests").select("employee_id, leave_type, leave_date, unit")
+        .in("employee_id", empIds).gte("leave_date", dateFrom).lte("leave_date", dateTo);
+      const lmMap = {};
+      (lreq || []).forEach(r => {
+        if (!lmMap[r.employee_id]) lmMap[r.employee_id] = { sick:{days:0,dates:[]}, personal:{days:0,dates:[]} };
+        const k = r.leave_type === "personal" ? "personal" : "sick";
+        lmMap[r.employee_id][k].days += (r.unit === "half" ? 0.5 : 1);
+        lmMap[r.employee_id][k].dates.push(r.leave_date);
+      });
+      setLeaveMonth(lmMap);
     } catch(e) {
       setMsg({ type:"error", text:"❌ " + e.message });
     } finally { setLoading(false); }
@@ -442,6 +468,26 @@ export default function WeeklyPage({ role }) {
         const rfNote = rfParts.length
           ? `<div class="row note"><span>(รวม${rfParts.join(" + ")})</span><span></span></div>`
           : "";
+        // v7: ประกันงานสะสม + สิทธิ์ลา (ใช้ string concat เลี่ยง template ซ้อน)
+        const insB = insBal[l.employee_id] || 0;
+        const lm   = leaveMonth[l.employee_id] || { sick:{days:0,dates:[]}, personal:{days:0,dates:[]} };
+        const lsm  = leaveSum[l.employee_id] || {};
+        const fmtLeaveDates = (dates) => {
+          const days = (dates || []).map(d => parseInt(String(d).slice(8,10), 10)).sort((a,b) => a - b);
+          return days.length ? days.join(", ") + " " + MONTHS_SHORT[month] : "";
+        };
+        const dnum = (v) => (v == null) ? "\u2014" : Number(v).toLocaleString("th-TH");
+        const leaveLine = (label, used, dates, remain) => {
+          const dtxt = (dates && dates.length) ? " (" + fmtLeaveDates(dates) + ")" : "";
+          return '<div class="row mini2"><span>' + label + ' \u00b7 \u0e43\u0e0a\u0e49\u0e40\u0e14\u0e37\u0e2d\u0e19\u0e19\u0e35\u0e49 ' + dnum(used) + ' \u0e27\u0e31\u0e19' + dtxt +
+                 '</span><span>\u0e04\u0e07\u0e40\u0e2b\u0e25\u0e37\u0e2d ' + dnum(remain) + ' \u0e27\u0e31\u0e19</span></div>';
+        };
+        const accSection =
+          '<div class="line"></div>' +
+          '<div class="row mini2"><span>\u0e1b\u0e23\u0e30\u0e01\u0e31\u0e19\u0e07\u0e32\u0e19\u0e2a\u0e30\u0e2a\u0e21</span><span>' + money(insB) + ' \u0e1a\u0e32\u0e17</span></div>' +
+          '<div class="leave-h">\u0e2a\u0e34\u0e17\u0e18\u0e34\u0e4c\u0e01\u0e32\u0e23\u0e25\u0e32</div>' +
+          leaveLine('\u0e25\u0e32\u0e1b\u0e48\u0e27\u0e22', lm.sick.days, lm.sick.dates, lsm.sick_remaining) +
+          leaveLine('\u0e25\u0e32\u0e01\u0e34\u0e08', lm.personal.days, lm.personal.dates, lsm.personal_remaining);
         return `
           ${baseInfo}
           <div class="cols">
@@ -463,7 +509,8 @@ export default function WeeklyPage({ role }) {
           ${rfNote}
           <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
           <div class="line"></div>
-          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>`;
+          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>
+          ${accSection}`;
       }
       const ot  = Number(l.ot||0);
       const adv = Number(l.advance||0);
@@ -545,6 +592,8 @@ export default function WeeklyPage({ role }) {
         .col-h { font-size:11px; font-weight:700; color:#1e3a5f; border-bottom:1px solid #cbd5e1; padding-bottom:0.7mm; margin-bottom:0.7mm; }
         .row.col-row { font-size:11.5px; padding:0.9mm 0; }
         .row.sub { font-weight:700; color:#1e3a5f; }
+        .row.mini2 { font-size:11px; padding:0.7mm 0; color:#475569; }
+        .leave-h { font-size:11px; font-weight:700; color:#1e3a5f; margin:1.5mm 0 0.3mm; }
         .sign { margin-top:auto; padding-top:5mm; text-align:right; }
         .sigline { border-bottom:1px solid #1e293b; width:55mm; margin-left:auto; }
         .siglabel { font-size:10px; color:#64748b; margin-top:1mm; }
