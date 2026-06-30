@@ -59,17 +59,19 @@ export default function SummaryPage({ role }) {
     if (view === "ss") {
       title = "สรุปประกันสังคม (ส่งสำนักงานบัญชี)";
       headCols = `<th class="c-no">ลำดับ</th><th class="c-name">ชื่อ-นามสกุล</th>
-        <th class="c-num">เงินเดือน</th><th class="c-num">ประกันสังคม</th>`;
+        <th class="c-num">เงินเดือน</th><th class="c-num">ประกันสังคม</th><th class="c-sign">ลงชื่อรับเงิน</th>`;
       bodyRows = ssRows.map((r,i) => `
         <tr>
           <td class="c-no">${i+1}</td>
           <td class="c-name">${esc(r.full_name || r.nickname)}</td>
           <td class="c-num">${hide ? blank : m(ssBase(r))}</td>
           <td class="c-num">${hide ? blank : m(r.social_security)}</td>
+          <td class="c-sign"></td>
         </tr>`).join("");
       footCols = `<td class="c-no"></td><td class="c-name">รวม (${ssRows.length} คน)</td>
         <td class="c-num">${hide ? blank : m(ssTotalSalary)}</td>
-        <td class="c-num">${hide ? blank : m(ssTotalSS)}</td>`;
+        <td class="c-num">${hide ? blank : m(ssTotalSS)}</td>
+        <td class="c-sign"></td>`;
       note = "นำส่งเงินสมทบประกันสังคม";
     } else {
       title = "ใบเซ็นรับเงินเดือน";
@@ -214,6 +216,7 @@ export default function SummaryPage({ role }) {
                   <th style={{ ...st.th, textAlign:"left" }}>ชื่อ-นามสกุล</th>
                   <th style={{ ...st.th, textAlign:"right" }}>เงินเดือน</th>
                   <th style={{ ...st.th, textAlign:"right" }}>ประกันสังคม</th>
+                  <th style={{ ...st.th, width:200 }}>ลงชื่อรับเงิน</th>
                 </tr></thead>
                 <tbody>
                   {ssRows.map((r,i) => (
@@ -222,6 +225,7 @@ export default function SummaryPage({ role }) {
                       <td style={st.td}>{r.full_name || r.nickname}</td>
                       <td style={{ ...st.td, textAlign:"right" }}>{hide ? <Hid/> : fmt(ssBase(r))}</td>
                       <td style={{ ...st.td, textAlign:"right" }}>{hide ? <Hid/> : fmt(r.social_security)}</td>
+                      <td style={st.td}></td>
                     </tr>
                   ))}
                 </tbody>
@@ -230,6 +234,7 @@ export default function SummaryPage({ role }) {
                   <td style={st.td}>รวม ({ssRows.length} คน)</td>
                   <td style={{ ...st.td, textAlign:"right" }}>{hide ? <Hid/> : fmt(ssTotalSalary)}</td>
                   <td style={{ ...st.td, textAlign:"right" }}>{hide ? <Hid/> : fmt(ssTotalSS)}</td>
+                  <td style={st.td}></td>
                 </tr></tfoot>
               </table>
             ) : (
