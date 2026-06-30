@@ -128,7 +128,7 @@ export default function WeeklyPage({ role }) {
 
       const { data: pr } = await supabase
         .from("payroll_records")
-        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation)")
+        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation, monthly_salary, daily_rate)")
         .eq("period_id", per.id);
       const sorted = sortByEmpCode(pr || []);
       setPayrolls(sorted);
@@ -149,10 +149,10 @@ export default function WeeklyPage({ role }) {
       setCycles(buildCyclesFromCalendar(year, month, logDates));
 
       const { data: adv } = await supabase
-        .from("deductions").select("employee_id, amount, deduct_date, note, deduction_types(name)")
+        .from("deductions").select("employee_id, amount, deduct_date, deduction_types(name)")
         .eq("deduct_cycle","saturday").in("employee_id", empIds)
         .gte("deduct_date", dateFrom).lte("deduct_date", dateTo);
-      setAdvances((adv || []).filter(a => a.note !== "เงินออก"));
+      setAdvances(adv || []);
 
       const { data: ei } = await supabase
         .from("extra_income_entries")
@@ -377,6 +377,9 @@ export default function WeeklyPage({ role }) {
     payrolls.forEach(r => { refundMap[r.employee_id] = {
       ins: Number(r.insurance_refund || 0), app: Number(r.app_fee_refund || 0) }; });
 
+    const prMap = {};
+    payrolls.forEach(r => { prMap[r.employee_id] = r; });
+
     const money = (n) => Number(n||0).toLocaleString("th-TH",{ minimumFractionDigits:2, maximumFractionDigits:2 });
     const esc   = (str) => String(str==null?"":str).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
 
@@ -390,7 +393,39 @@ export default function WeeklyPage({ role }) {
       if (isMonthEnd) {
         const sat = Number(l.advance||0);
         const net = sat + Number(l.to_pay||0);
+        const pr  = prMap[l.employee_id] || {};
+        const emp = pr.employees || {};
         const rf  = refundMap[l.employee_id] || { ins:0, app:0 };
+        const num = (v) => Number(v||0);
+        const dRow = (label, val, cls) =>
+          num(val) > 0 ? `<div class="row col-row"><span>${label}</span><span class="${cls||""}">${money(val)}</span></div>` : "";
+
+        const wageEarned = num(pr.base_wage) + num(pr.holiday_wage);
+        const incRows = [
+          `<div class="row col-row"><span>ค่าแรง (${num(pr.work_days)} วัน)</span><span>${money(wageEarned)}</span></div>`,
+          num(pr.ot_amount) > 0 ? `<div class="row col-row"><span>OT (${num(pr.ot_hours)} ชม.)</span><span class="green">${money(pr.ot_amount)}</span></div>` : "",
+          dRow("เบี้ยขยัน", pr.diligence_bonus, "green"),
+          dRow("เงินประจำตำแหน่ง", pr.position_allowance, "green"),
+        ];
+        const incItems2 = (l.income_items || []).filter(it => Number(it.amount) > 0);
+        if (incItems2.length) incItems2.forEach(it => incRows.push(`<div class="row col-row"><span>${esc(it.label)}</span><span class="green">${money(it.amount)}</span></div>`));
+        else if (num(pr.other_income) > 0) incRows.push(`<div class="row col-row"><span>รายได้พิเศษ</span><span class="green">${money(pr.other_income)}</span></div>`);
+
+        const dedRows = [
+          dRow("ประกันงาน", pr.job_insurance, "red"),
+          dRow("ประกันสังคม", pr.social_security, "red"),
+          dRow("ค่างวด/หักยืม", pr.loan_deduct, "red"),
+          dRow("อื่นๆ (แม็คโคร/ชำรุด)", pr.other_deduct, "red"),
+          dRow("หักสาย", pr.late_deduct, "red"),
+          dRow("ลา/ขาด", pr.leave_deduct, "red"),
+          dRow("เบิกเงินสด", pr.advance_total, "red"),
+        ].filter(Boolean);
+
+        const incHtml = incRows.filter(Boolean).join("");
+        const emptyRow = `<div class="row col-row"><span>-</span><span></span></div>`;
+        const dedHtml = dedRows.length ? dedRows.join("") : emptyRow;
+        const baseInfo = (num(emp.monthly_salary) > 0 || num(emp.daily_rate) > 0)
+          ? `<div class="baseinfo">ฐานเงินเดือน ${money(emp.monthly_salary)} · วันละ ${money(emp.daily_rate)} บ.</div>` : "";
         const rfParts = [];
         if (rf.ins > 0) rfParts.push(`คืนประกัน ${money(rf.ins)}`);
         if (rf.app > 0) rfParts.push(`คืนค่าสมัคร ${money(rf.app)}`);
@@ -398,12 +433,27 @@ export default function WeeklyPage({ role }) {
           ? `<div class="row note"><span>(รวม${rfParts.join(" + ")})</span><span></span></div>`
           : "";
         return `
+          ${baseInfo}
+          <div class="cols">
+            <div class="col">
+              <div class="col-h">รายได้</div>
+              ${incHtml}
+              <div class="line"></div>
+              <div class="row col-row sub"><span>รวมรายได้</span><span>${money(pr.total_income)}</span></div>
+            </div>
+            <div class="col">
+              <div class="col-h">รายการหัก</div>
+              ${dedHtml}
+              <div class="line"></div>
+              <div class="row col-row sub"><span>รวมรายการหัก</span><span>${money(pr.total_deduct)}</span></div>
+            </div>
+          </div>
+          <div class="line"></div>
           <div class="row"><span>สุทธิทั้งเดือน</span><span>${money(net)}</span></div>
           ${rfNote}
           <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
           <div class="line"></div>
-          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>
-          ${extraSection}`;
+          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>`;
       }
       const ot  = Number(l.ot||0);
       const adv = Number(l.advance||0);
@@ -475,6 +525,12 @@ export default function WeeklyPage({ role }) {
         .total { font-size:17px; font-weight:800; color:#1e3a5f; padding-top:2mm; }
         .mini-h { font-size:11px; color:#64748b; font-weight:700; margin:1mm 0 0.5mm; }
         .row.mini { font-size:12px; padding:1.2mm 0; }
+        .baseinfo { font-size:11px; color:#64748b; margin-bottom:2mm; }
+        .cols { display:flex; gap:10mm; margin:1mm 0 2mm; }
+        .col { flex:1; min-width:0; }
+        .col-h { font-size:12px; font-weight:700; color:#1e3a5f; border-bottom:1px solid #cbd5e1; padding-bottom:1mm; margin-bottom:1mm; }
+        .row.col-row { font-size:12.5px; padding:1.3mm 0; }
+        .row.sub { font-weight:700; color:#1e3a5f; }
         .sign { margin-top:10mm; text-align:right; }
         .sigline { border-bottom:1px solid #1e293b; width:60mm; margin-left:auto; }
         .siglabel { font-size:12px; color:#64748b; margin-top:1.5mm; }
