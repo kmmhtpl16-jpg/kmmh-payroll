@@ -119,6 +119,7 @@ export default function WeeklyPage({ role }) {
   const [insBal,       setInsBal]       = useState({});     // employee_id -> ประกันงานสะสม
   const [leaveSum,     setLeaveSum]     = useState({});     // employee_id -> v_leave_balance_summary row
   const [leaveMonth,   setLeaveMonth]   = useState({});     // employee_id -> {sick:{days,dates}, personal:{days,dates}}
+  const [dedByType,    setDedByType]    = useState({});     // employee_id -> [{name, amount}] (หักจริงแยกตามแท็ก, ตัดเงินออก)
   const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
@@ -198,6 +199,23 @@ export default function WeeklyPage({ role }) {
         lmMap[r.employee_id][k].dates.push(r.leave_date);
       });
       setLeaveMonth(lmMap);
+
+      // 🔧 v9: หักทั้งหมดในเดือน แยกตามแท็ก (ตัด note='เงินออก') สำหรับสลิป
+      const { data: alld } = await supabase
+        .from("deductions").select("employee_id, amount, note, deduction_types(name)")
+        .in("employee_id", empIds).gte("deduct_date", dateFrom).lte("deduct_date", dateTo);
+      const dtMap = {};
+      (alld || []).forEach(d => {
+        if (d.note === "เงินออก") return;
+        const nm = d.deduction_types?.name || "อื่นๆ";
+        if (!dtMap[d.employee_id]) dtMap[d.employee_id] = {};
+        dtMap[d.employee_id][nm] = (dtMap[d.employee_id][nm] || 0) + Number(d.amount || 0);
+      });
+      const dtArr = {};
+      Object.keys(dtMap).forEach(eid => {
+        dtArr[eid] = Object.entries(dtMap[eid]).map(([name, amount]) => ({ name, amount }));
+      });
+      setDedByType(dtArr);
     } catch(e) {
       setMsg({ type:"error", text:"❌ " + e.message });
     } finally { setLoading(false); }
@@ -447,14 +465,16 @@ export default function WeeklyPage({ role }) {
         if (incItems2.length) incItems2.forEach(it => incRows.push(`<div class="row col-row"><span>${esc(it.label)}</span><span class="green">${money(it.amount)}</span></div>`));
         else if (num(pr.other_income) > 0) incRows.push(`<div class="row col-row"><span>รายได้พิเศษ</span><span class="green">${money(pr.other_income)}</span></div>`);
 
+        const DED_ORDER = ["เบิกเงินสด","ค่าแม็กโคร","เงินกู้ยืม","เงินกู้ กยศ.","ค่าสินค้าชำรุด","อื่นๆ"];
+        const myDeds = (dedByType[l.employee_id] || [])
+          .filter(t => num(t.amount) > 0)
+          .sort((a,b) => ((DED_ORDER.indexOf(a.name)+1) || 99) - ((DED_ORDER.indexOf(b.name)+1) || 99));
         const dedRows = [
           dRow("ประกันงาน", pr.job_insurance, "red"),
           dRow("ประกันสังคม", pr.social_security, "red"),
-          dRow("ค่างวด/หักยืม", pr.loan_deduct, "red"),
-          dRow("อื่นๆ (แม็คโคร/ชำรุด)", pr.other_deduct, "red"),
           dRow("หักสาย", pr.late_deduct, "red"),
           dRow("ลา/ขาด", pr.leave_deduct, "red"),
-          dRow("เบิกเงินสด", pr.advance_total, "red"),
+          ...myDeds.map(t => dRow(t.name, t.amount, "red")),
         ].filter(Boolean);
 
         const incHtml = incRows.filter(Boolean).join("");
@@ -484,7 +504,7 @@ export default function WeeklyPage({ role }) {
         };
         const accSection =
           '<div class="line"></div>' +
-          '<div class="row mini2"><span>\u0e1b\u0e23\u0e30\u0e01\u0e31\u0e19\u0e07\u0e32\u0e19\u0e2a\u0e30\u0e2a\u0e21</span><span>' + money(insB) + ' \u0e1a\u0e32\u0e17</span></div>' +
+          '<div class="row mini2"><span>\u0e1b\u0e23\u0e30\u0e01\u0e31\u0e19\u0e07\u0e32\u0e19\u0e2a\u0e30\u0e2a\u0e21 (\u0e23\u0e27\u0e21\u0e40\u0e14\u0e37\u0e2d\u0e19\u0e19\u0e35\u0e49\u0e41\u0e25\u0e49\u0e27)</span><span>' + money(insB) + ' \u0e1a\u0e32\u0e17</span></div>' +
           '<div class="leave-h">\u0e2a\u0e34\u0e17\u0e18\u0e34\u0e4c\u0e01\u0e32\u0e23\u0e25\u0e32</div>' +
           leaveLine('\u0e25\u0e32\u0e1b\u0e48\u0e27\u0e22', lm.sick.days, lm.sick.dates, lsm.sick_remaining) +
           ((lsm.personal_quota == null || Number(lsm.personal_quota) === 0)
