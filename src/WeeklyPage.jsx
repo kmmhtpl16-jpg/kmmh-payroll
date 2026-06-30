@@ -445,8 +445,11 @@ export default function WeeklyPage({ role }) {
            ${incItems.map(it => `<div class="row mini"><span>${esc(it.label)}</span><span class="green">${money(it.amount)}</span></div>`).join("")}`
         : "";
       if (isMonthEnd) {
-        const sat = Number(l.advance||0);
-        const net = sat + Number(l.to_pay||0);
+        const sat = Number(l.advance||0);                       // ค่าแรงเสาร์รวม (จ่ายไปแล้ว)
+        const mEnd = Math.round(Number(l.to_pay||0));           // รับสิ้นเดือน (จ่ายจริง)
+        const m0 = (v) => Math.round(Number(v||0)).toLocaleString("th-TH");
+        const R  = (v) => Math.round(Number(v||0));
+        const row = (label, val, cls) => '<div class="row col-row"><span>' + label + '</span><span class="' + (cls||"") + '">' + m0(val) + '</span></div>';
         const pr  = prMap[l.employee_id] || {};
         const emp = pr.employees || {};
         const rf  = refundMap[l.employee_id] || { ins:0, app:0 };
@@ -454,32 +457,36 @@ export default function WeeklyPage({ role }) {
         const dRow = (label, val, cls) =>
           num(val) > 0 ? `<div class="row col-row"><span>${label}</span><span class="${cls||""}">${money(val)}</span></div>` : "";
 
-        const wageEarned = num(pr.base_wage) + num(pr.holiday_wage);
-        const incRows = [
-          `<div class="row col-row"><span>ค่าแรง (${num(pr.work_days)} วัน)</span><span>${money(wageEarned)}</span></div>`,
-          num(pr.ot_amount) > 0 ? `<div class="row col-row"><span>OT (${num(pr.ot_hours)} ชม.)</span><span class="green">${money(pr.ot_amount)}</span></div>` : "",
-          dRow("เบี้ยขยัน", pr.diligence_bonus, "green"),
-          dRow("เงินประจำตำแหน่ง", pr.position_allowance, "green"),
-        ];
-        const incItems2 = (l.income_items || []).filter(it => Number(it.amount) > 0);
-        if (incItems2.length) incItems2.forEach(it => incRows.push(`<div class="row col-row"><span>${esc(it.label)}</span><span class="green">${money(it.amount)}</span></div>`));
-        else if (num(pr.other_income) > 0) incRows.push(`<div class="row col-row"><span>รายได้พิเศษ</span><span class="green">${money(pr.other_income)}</span></div>`);
-
-        const DED_ORDER = ["เบิกเงินสด","ค่าแม็กโคร","เงินกู้ยืม","เงินกู้ กยศ.","ค่าสินค้าชำรุด","อื่นๆ"];
-        const myDeds = (dedByType[l.employee_id] || [])
-          .filter(t => num(t.amount) > 0)
+        // ── รายการหัก (ปัดเศษ): รวม "ค่าแรงเสาร์" เข้ากับ "เบิกเงินสด" ──
+        const DED_ORDER = ["ค่าแม็กโคร","เงินกู้ยืม","เงินกู้ กยศ.","ค่าสินค้าชำรุด","อื่นๆ"];
+        const cashAdv = (dedByType[l.employee_id] || []).find(t => t.name === "เบิกเงินสด");
+        const cashReal = R(cashAdv ? cashAdv.amount : 0) + R(sat);   // เบิกสด + ค่าแรงเสาร์
+        const tagDeds = (dedByType[l.employee_id] || [])
+          .filter(t => num(t.amount) > 0 && t.name !== "เบิกเงินสด")
           .sort((a,b) => ((DED_ORDER.indexOf(a.name)+1) || 99) - ((DED_ORDER.indexOf(b.name)+1) || 99));
-        const dedRows = [
-          dRow("ประกันงาน", pr.job_insurance, "red"),
-          dRow("ประกันสังคม", pr.social_security, "red"),
-          dRow("หักสาย", pr.late_deduct, "red"),
-          dRow("ลา/ขาด", pr.leave_deduct, "red"),
-          ...myDeds.map(t => dRow(t.name, t.amount, "red")),
-        ].filter(Boolean);
+        const fixedDed = [];
+        if (num(pr.job_insurance) > 0)   fixedDed.push(['ประกันงาน', R(pr.job_insurance)]);
+        if (num(pr.social_security) > 0) fixedDed.push(['ประกันสังคม', R(pr.social_security)]);
+        if (num(pr.late_deduct) > 0)     fixedDed.push(['หักสาย', R(pr.late_deduct)]);
+        if (num(pr.leave_deduct) > 0)    fixedDed.push(['ลา/ขาด', R(pr.leave_deduct)]);
+        const expTotal = fixedDed.reduce((sm,x) => sm + x[1], 0) + cashReal + tagDeds.reduce((sm,t) => sm + R(t.amount), 0);
+        const dedHtml =
+          fixedDed.map(x => row(x[0], x[1], "red")).join("") +
+          (cashReal > 0 ? row('เบิกเงินสด', cashReal, "red") : "") +
+          tagDeds.map(t => row(t.name, R(t.amount), "red")).join("");
 
-        const incHtml = incRows.filter(Boolean).join("");
-        const emptyRow = `<div class="row col-row"><span>-</span><span></span></div>`;
-        const dedHtml = dedRows.length ? dedRows.join("") : emptyRow;
+        // ── รายได้: รวมรายได้ = รวมหัก + รับสิ้นเดือน (ค่าแรงรับเศษให้ลงตัว) ──
+        const incTotal = expTotal + mEnd;
+        const otherInc = [];
+        if (num(pr.ot_amount) > 0)          otherInc.push(['OT (' + num(pr.ot_hours) + ' ชม.)', R(pr.ot_amount), 'green']);
+        if (num(pr.diligence_bonus) > 0)    otherInc.push(['เบี้ยขยัน', R(pr.diligence_bonus), 'green']);
+        if (num(pr.position_allowance) > 0) otherInc.push(['เงินประจำตำแหน่ง', R(pr.position_allowance), 'green']);
+        const incItems2 = (l.income_items || []).filter(it => Number(it.amount) > 0);
+        if (incItems2.length) incItems2.forEach(it => otherInc.push([esc(it.label), R(it.amount), 'green']));
+        else if (num(pr.other_income) > 0) otherInc.push(['รายได้พิเศษ', R(pr.other_income), 'green']);
+        const otherIncSum = otherInc.reduce((sm, x) => sm + x[1], 0);
+        const wageShow = incTotal - otherIncSum;
+        const incHtml = row('ค่าแรง (' + num(pr.work_days) + ' วัน)', wageShow) + otherInc.map(x => row(x[0], x[1], x[2])).join("");
         const baseInfo = (num(emp.monthly_salary) > 0 || num(emp.daily_rate) > 0)
           ? `<div class="baseinfo">ฐานเงินเดือน ${money(emp.monthly_salary)} · วันละ ${money(emp.daily_rate)} บ.</div>` : "";
         const rfParts = [];
@@ -517,21 +524,18 @@ export default function WeeklyPage({ role }) {
               <div class="col-h">รายได้</div>
               ${incHtml}
               <div class="line"></div>
-              <div class="row col-row sub"><span>รวมรายได้</span><span>${money(pr.total_income)}</span></div>
+              <div class="row col-row sub"><span>รวมรายได้</span><span>${m0(incTotal)}</span></div>
             </div>
             <div class="col">
               <div class="col-h">รายการหัก</div>
               ${dedHtml}
               <div class="line"></div>
-              <div class="row col-row sub"><span>รวมรายการหัก</span><span>${money(pr.total_deduct)}</span></div>
+              <div class="row col-row sub"><span>รวมรายการหัก</span><span>${m0(expTotal)}</span></div>
             </div>
           </div>
           <div class="line"></div>
-          <div class="row"><span>สุทธิทั้งเดือน</span><span>${money(net)}</span></div>
           ${rfNote}
-          <div class="row"><span>จ่ายเสาร์แล้ว</span><span class="red">(${money(sat)})</span></div>
-          <div class="line"></div>
-          <div class="row total"><span>จ่ายสิ้นเดือน</span><span>${money(l.to_pay)}</span></div>
+          <div class="row total"><span>รับสิ้นเดือน</span><span>${m0(mEnd)}</span></div>
           ${accSection}`;
       }
       const ot  = Number(l.ot||0);
