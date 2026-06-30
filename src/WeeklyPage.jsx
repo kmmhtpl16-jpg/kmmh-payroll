@@ -115,6 +115,7 @@ export default function WeeklyPage({ role }) {
   const [submitting,   setSubmitting]   = useState(null);
   const [approving,    setApproving]    = useState(null);
   const [returnModal,  setReturnModal]  = useState(null);
+  const [printModal,   setPrintModal]   = useState(null);   // { voucher, selected:Set<employee_id> }
   const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
@@ -351,7 +352,15 @@ export default function WeeklyPage({ role }) {
   //   - รอบเสาร์ : ค่าแรงรอบนี้ / OT-อื่นๆ / เบิกในรอบ / จ่ายจริง
   //   - สิ้นเดือน : สุทธิทั้งเดือน / จ่ายเสาร์แล้ว / จ่ายสิ้นเดือน
   // ════════════════════════════════════════════════════════════
-  function printVoucherSlips(voucher) {
+  function openPrintModal(voucher) {
+    if (!voucher || !(voucher.lines || []).length) {
+      setMsg({ type:"warn", text:"⚠️ ไม่มีข้อมูลใบเบิกให้พิมพ์" });
+      return;
+    }
+    setPrintModal({ voucher, selected: new Set(voucher.lines.map(l => l.employee_id)) });
+  }
+
+  function printVoucherSlips(voucher, selectedIds) {
     if (!voucher || !(voucher.lines || []).length) {
       setMsg({ type:"warn", text:"⚠️ ไม่มีข้อมูลใบเบิกให้พิมพ์" });
       return;
@@ -363,9 +372,10 @@ export default function WeeklyPage({ role }) {
       ? "จ่ายสิ้นเดือน"
       : `รอบเสาร์ · ถึง ${fmtDate(new Date(voucher.cycle_date + "T00:00:00"))}`;
 
-    const lines = [...voucher.lines].sort(
-      (a,b) => (a.emp_code||"").localeCompare(b.emp_code||"", undefined, { numeric:true })
-    );
+    const lines = [...voucher.lines]
+      .filter(l => !selectedIds || selectedIds.has(l.employee_id))
+      .sort((a,b) => (a.emp_code||"").localeCompare(b.emp_code||"", undefined, { numeric:true }));
+    if (!lines.length) { setMsg({ type:"warn", text:"⚠️ ยังไม่ได้เลือกพนักงานที่จะพิมพ์" }); return; }
 
     // ชื่อจริง: ใช้จาก snapshot ก่อน; ถ้า voucher เก่าไม่มี → ดึงสดจากพนักงานปัจจุบัน
     const nameMap = {};
@@ -490,11 +500,14 @@ export default function WeeklyPage({ role }) {
         </div>`;
     }
 
-    // จัด 2 ใบ/แผ่น
+    // จัด 2 ใบ/แผ่น A4 แนวนอน — ครึ่งแผ่นต่อคน (ขนาดเท่ากันทุกใบ)
     const sheets = [];
     for (let i = 0; i < lines.length; i += 2) {
-      const pair = lines.slice(i, i + 2).map(slipHtml).join('<div class="cut"></div>');
-      sheets.push(`<div class="sheet">${pair}</div>`);
+      const left  = `<div class="half">${slipHtml(lines[i])}</div>`;
+      const right = lines[i+1]
+        ? `<div class="half">${slipHtml(lines[i+1])}</div>`
+        : `<div class="half"></div>`;
+      sheets.push(`<div class="sheet">${left}<div class="cut-v"></div>${right}</div>`);
     }
 
     const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8">
@@ -502,12 +515,13 @@ export default function WeeklyPage({ role }) {
       <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family:'Sarabun','Tahoma',sans-serif; color:#1e293b; }
-        @page { size:A4 portrait; margin:0; }
-        .sheet { width:210mm; height:297mm; padding:9mm 12mm; page-break-after:always; display:flex; flex-direction:column; }
+        @page { size:A4 landscape; margin:0; }
+        .sheet { width:297mm; height:210mm; padding:8mm 7mm; page-break-after:always; display:flex; flex-direction:row; align-items:stretch; }
         .sheet:last-child { page-break-after:auto; }
-        .cut { border-top:1px dashed #94a3b8; margin:3.5mm 0; position:relative; }
-        .cut::after { content:"✂"; position:absolute; left:-2mm; top:-3mm; font-size:10px; color:#94a3b8; }
-        .slip { border:1px solid #cbd5e1; border-radius:6px; padding:5mm 7mm; page-break-inside:avoid; }
+        .half { flex:1 1 50%; width:50%; height:100%; padding:0 6mm; display:flex; }
+        .cut-v { border-left:1px dashed #94a3b8; align-self:stretch; position:relative; }
+        .cut-v::after { content:"✂"; position:absolute; left:-3mm; top:50%; font-size:10px; color:#94a3b8; }
+        .slip { flex:1; height:100%; border:1px solid #cbd5e1; border-radius:6px; padding:6mm 7mm; display:flex; flex-direction:column; page-break-inside:avoid; }
         .head { text-align:center; border-bottom:1.5px solid #1e3a5f; padding-bottom:2mm; margin-bottom:2.5mm; }
         .co { font-size:15px; font-weight:800; color:#1e3a5f; }
         .sub { font-size:11px; color:#64748b; margin-top:1px; }
@@ -531,7 +545,7 @@ export default function WeeklyPage({ role }) {
         .col-h { font-size:11px; font-weight:700; color:#1e3a5f; border-bottom:1px solid #cbd5e1; padding-bottom:0.7mm; margin-bottom:0.7mm; }
         .row.col-row { font-size:11.5px; padding:0.9mm 0; }
         .row.sub { font-weight:700; color:#1e3a5f; }
-        .sign { margin-top:5mm; text-align:right; }
+        .sign { margin-top:auto; padding-top:5mm; text-align:right; }
         .sigline { border-bottom:1px solid #1e293b; width:55mm; margin-left:auto; }
         .siglabel { font-size:10px; color:#64748b; margin-top:1mm; }
         .sigdate { font-size:10px; color:#64748b; margin-top:1.2mm; }
@@ -675,7 +689,7 @@ export default function WeeklyPage({ role }) {
               onSubmit={() => submitVoucher(cycle, rows, false)}
               onApprove={() => approveVoucher(cycleKey)}
               onReturn={() => setReturnModal({ cycleKey })}
-              onPrint={() => printVoucherSlips(voucher)} /></div>
+              onPrint={() => openPrintModal(voucher)} /></div>
           </div>
         );
       })}
@@ -761,13 +775,67 @@ export default function WeeklyPage({ role }) {
               onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
               onApprove={() => approveVoucher("month_end")}
               onReturn={() => setReturnModal({ cycleKey:"month_end" })}
-              onPrint={() => printVoucherSlips(voucherMe)}
+              onPrint={() => openPrintModal(voucherMe)}
               purple />}
           </div>
         );
       })()}
 
       {detail && <DetailModal detail={detail} onClose={() => setDetail(null)} />}
+
+      {printModal && (() => {
+        const plines = [...(printModal.voucher.lines || [])]
+          .sort((a,b) => (a.emp_code||"").localeCompare(b.emp_code||"", undefined, { numeric:true }));
+        const toggle = (id) => {
+          const next = new Set(printModal.selected);
+          next.has(id) ? next.delete(id) : next.add(id);
+          setPrintModal({ ...printModal, selected: next });
+        };
+        const setAll = (on) => setPrintModal({ ...printModal,
+          selected: on ? new Set(plines.map(l => l.employee_id)) : new Set() });
+        const nSel = printModal.selected.size;
+        return (
+          <div style={s.modalOverlay} onClick={() => setPrintModal(null)}>
+            <div style={{ ...s.modal, width:420 }} onClick={e => e.stopPropagation()}>
+              <div style={s.modalHeader}>
+                <span style={{ fontWeight:700, color:"#fff" }}>🖨️ เลือกพนักงานที่จะพิมพ์สลิป</span>
+                <button onClick={() => setPrintModal(null)} style={s.closeBtn}>✕</button>
+              </div>
+              <div style={{ padding:16 }}>
+                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                  <button onClick={() => setAll(true)} style={{ ...s.markBtn, background:"#0369a1", flex:1 }}>เลือกทั้งหมด</button>
+                  <button onClick={() => setAll(false)} style={{ ...s.markBtn, background:"#94a3b8", flex:1 }}>ไม่เลือก</button>
+                </div>
+                <div style={{ maxHeight:320, overflow:"auto", border:"1px solid #e2e8f0", borderRadius:8 }}>
+                  {plines.map(l => {
+                    const on = printModal.selected.has(l.employee_id);
+                    return (
+                      <label key={l.employee_id} style={{ display:"flex", alignItems:"center", gap:10,
+                        padding:"9px 12px", borderBottom:"1px solid #f1f5f9", cursor:"pointer",
+                        background: on ? "#eff6ff" : "#fff" }}>
+                        <input type="checkbox" checked={on} onChange={() => toggle(l.employee_id)}
+                          style={{ width:17, height:17, cursor:"pointer" }} />
+                        <span style={{ fontWeight:700, color:"#1e293b", minWidth:46 }}>{l.emp_code}</span>
+                        <span style={{ color:"#334155" }}>{l.nickname}</span>
+                        <span style={{ marginLeft:"auto", fontVariantNumeric:"tabular-nums", color:"#0369a1", fontWeight:600 }}>
+                          {Number(l.to_pay||0).toLocaleString("th-TH")}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display:"flex", gap:8, marginTop:12 }}>
+                  <button disabled={!nSel}
+                    onClick={() => { printVoucherSlips(printModal.voucher, printModal.selected); setPrintModal(null); }}
+                    style={{ ...s.markBtn, background: nSel ? "#0369a1" : "#cbd5e1", flex:2 }}>
+                    🖨️ พิมพ์ ({nSel} คน)
+                  </button>
+                  <button onClick={() => setPrintModal(null)} style={{ ...s.markBtn, background:"#94a3b8", flex:1 }}>ยกเลิก</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {returnModal && (
         <div style={s.modalOverlay} onClick={() => setReturnModal(null)}>
