@@ -8,7 +8,7 @@
 // แหล่งข้อมูล (ดึงเอง ไม่ผูกกับการกดคำนวณเงินเดือน):
 //   - employees.daily_rate         → ค่าแรงต่อวัน
 //   - attendance_logs              → วันที่ลงงานจริง (ไม่นับวันอาทิตย์)
-//   - deductions (ประเภทชื่อมี "เบิก") → เบิกที่เอาไปแล้ว
+//   - deductions (ทุกประเภท) → เบิกที่เอาไปแล้ว (แยกยอดตามประเภท)
 //
 // หมายเหตุ: วันอาทิตย์ไม่นับเป็นวันหาค่าแรงเบิก (ค่าวันอาทิตย์จ่ายแยกตามระบบเดิม)
 
@@ -81,9 +81,8 @@ export default function AdvanceSummaryCard() {
         .lte("deduct_date", todayStr);
       if (e3) throw e3;
 
-      const advances = (deds || []).filter((d) =>
-        (d.deduction_types?.name || "").includes("เบิก")
-      );
+      // รวมทุกประเภทในตารางรายจ่ายพนักงาน = ถือเป็น "เบิก/เอาไปแล้ว" ทั้งหมด
+      const advances = deds || [];
 
       const result = (emps || []).map((emp) => {
         const isEom = emp.pay_schedule === "end_of_month";
@@ -101,14 +100,23 @@ export default function AdvanceSummaryCard() {
         const rate = Number(emp.daily_rate || 0);
         const earned = workDays * rate;
 
-        const taken = advances
-          .filter(
-            (a) =>
-              a.employee_id === emp.id &&
-              a.deduct_date >= winStart &&
-              a.deduct_date <= todayStr
-          )
-          .reduce((s, a) => s + Number(a.amount || 0), 0);
+        const empAdvs = advances.filter(
+          (a) =>
+            a.employee_id === emp.id &&
+            a.deduct_date >= winStart &&
+            a.deduct_date <= todayStr
+        );
+        const taken = empAdvs.reduce((s, a) => s + Number(a.amount || 0), 0);
+
+        // แยกยอดเบิกตามประเภท (เรียงมาก→น้อย)
+        const bmap = {};
+        for (const a of empAdvs) {
+          const nm = a.deduction_types?.name || "อื่นๆ";
+          bmap[nm] = (bmap[nm] || 0) + Number(a.amount || 0);
+        }
+        const breakdown = Object.entries(bmap)
+          .map(([name, amount]) => ({ name, amount }))
+          .sort((x, y) => y.amount - x.amount);
 
         const remaining = Math.max(0, earned - taken);
         return {
@@ -120,6 +128,7 @@ export default function AdvanceSummaryCard() {
           workDays,
           earned,
           taken,
+          breakdown,
           remaining,
         };
       });
@@ -206,10 +215,24 @@ export default function AdvanceSummaryCard() {
                         style={{
                           ...st.td,
                           textAlign: "right",
+                          whiteSpace: "normal",
                           color: r.taken > 0 ? "#dc2626" : "#9ca3af",
                         }}
                       >
-                        {r.taken > 0 ? `(${fmt(r.taken)})` : "—"}
+                        {r.taken > 0 ? (
+                          <div>
+                            <div style={{ fontWeight: 700 }}>({fmt(r.taken)})</div>
+                            <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.45, marginTop: 2 }}>
+                              {r.breakdown.map((b) => (
+                                <div key={b.name}>
+                                  {b.name} {fmtInt(b.amount)}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td
                         style={{
@@ -237,7 +260,7 @@ export default function AdvanceSummaryCard() {
                 </tfoot>
               </table>
               <p style={st.note}>
-                * ดูอย่างเดียว · หาได้ = ค่าแรงต่อวัน × วันลงงานในรอบ (ไม่นับวันอาทิตย์) · เบิกได้อีก = หาได้ − เบิกแล้ว
+                * ดูอย่างเดียว · หาได้ = ค่าแรงต่อวัน × วันลงงานในรอบ (ไม่นับวันอาทิตย์) · เบิกแล้ว = ทุกประเภทในรายจ่ายพนักงานรวมกัน · เบิกได้อีก = หาได้ − เบิกแล้ว
               </p>
             </div>
           )}
