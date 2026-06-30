@@ -149,10 +149,10 @@ export default function WeeklyPage({ role }) {
       setCycles(buildCyclesFromCalendar(year, month, logDates));
 
       const { data: adv } = await supabase
-        .from("deductions").select("employee_id, amount, deduct_date, deduction_types(name)")
+        .from("deductions").select("employee_id, amount, deduct_date, note, deduction_types(name)")
         .eq("deduct_cycle","saturday").in("employee_id", empIds)
         .gte("deduct_date", dateFrom).lte("deduct_date", dateTo);
-      setAdvances(adv || []);
+      setAdvances((adv || []).filter(a => a.note !== "เงินออก"));
 
       const { data: ei } = await supabase
         .from("extra_income_entries")

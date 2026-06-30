@@ -377,7 +377,7 @@ export async function calcPayroll(year, month) {
 
     // รายจ่าย
     const other_deduct   = empDeductions
-      .filter(d => d.deduction_type_id !== ADVANCE_DEDUCTION_TYPE_ID)
+      .filter(d => d.deduction_type_id !== ADVANCE_DEDUCTION_TYPE_ID && d.note !== "เงินออก")
       .reduce((s, d) => s + parseFloat(d.amount || 0), 0);
     const deduct_advance = empDeductions
       .filter(d => d.deduction_type_id === ADVANCE_DEDUCTION_TYPE_ID)
