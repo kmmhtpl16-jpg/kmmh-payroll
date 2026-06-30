@@ -92,14 +92,14 @@ export default function SummaryPage({ role }) {
       <title>${esc(title)}</title>
       <style>
         * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family:'Sarabun','Tahoma',sans-serif; color:#1e293b; padding:14mm 12mm; }
+        body { font-family:'Sarabun','Tahoma',sans-serif; color:#1e293b; padding:9mm 12mm; }
         @page { size:A4 portrait; margin:0; }
-        .head { text-align:center; margin-bottom:5mm; }
-        .co { font-size:18px; font-weight:800; color:#1e3a5f; }
+        .head { text-align:center; margin-bottom:3mm; }
+        .co { font-size:17px; font-weight:800; color:#1e3a5f; }
         .ti { font-size:15px; font-weight:700; margin-top:1.5mm; }
         .pe { font-size:12px; color:#475569; margin-top:1mm; }
         table { width:100%; border-collapse:collapse; font-size:13px; }
-        th, td { border:1px solid #94a3b8; padding:2.4mm 3mm; }
+        th, td { border:1px solid #94a3b8; padding:1.5mm 3mm; }
         th { background:#e2e8f0; font-weight:700; }
         .c-no   { width:12mm; text-align:center; }
         .c-name { text-align:left; }
@@ -108,9 +108,9 @@ export default function SummaryPage({ role }) {
         .nick { color:#64748b; font-size:11px; margin-left:5px; }
         tfoot td { font-weight:800; background:#f1f5f9; }
         .hid { color:#cbd5e1; letter-spacing:1px; }
-        tbody tr { height:11mm; }
-        .foot-note { margin-top:6mm; font-size:11px; color:#64748b; }
-        .sigbox { margin-top:14mm; display:flex; justify-content:flex-end; }
+        tbody tr { height:8mm; }
+        .foot-note { margin-top:4mm; font-size:11px; color:#64748b; }
+        .sigbox { margin-top:8mm; display:flex; justify-content:flex-end; }
         .sigbox .b { text-align:center; font-size:12px; }
         .sigbox .ln { border-bottom:1px solid #1e293b; width:60mm; margin-bottom:1.5mm; height:9mm; }
       </style></head><body>
