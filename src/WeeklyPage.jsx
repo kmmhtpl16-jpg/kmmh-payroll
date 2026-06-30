@@ -457,26 +457,15 @@ export default function WeeklyPage({ role }) {
         const dRow = (label, val, cls) =>
           num(val) > 0 ? `<div class="row col-row"><span>${label}</span><span class="${cls||""}">${money(val)}</span></div>` : "";
 
-        // ── รายการหัก (ปัดเศษ): รวม "ค่าแรงเสาร์" เข้ากับ "เบิกเงินสด" ──
-        const DED_ORDER = ["ค่าแม็กโคร","เงินกู้ยืม","เงินกู้ กยศ.","ค่าสินค้าชำรุด","อื่นๆ"];
-        const cashAdv = (dedByType[l.employee_id] || []).find(t => t.name === "เบิกเงินสด");
-        const cashReal = R(cashAdv ? cashAdv.amount : 0) + R(sat);   // เบิกสด + ค่าแรงเสาร์
-        const tagDeds = (dedByType[l.employee_id] || [])
-          .filter(t => num(t.amount) > 0 && t.name !== "เบิกเงินสด")
-          .sort((a,b) => ((DED_ORDER.indexOf(a.name)+1) || 99) - ((DED_ORDER.indexOf(b.name)+1) || 99));
-        const fixedDed = [];
-        if (num(pr.job_insurance) > 0)   fixedDed.push(['ประกันงาน', R(pr.job_insurance)]);
-        if (num(pr.social_security) > 0) fixedDed.push(['ประกันสังคม', R(pr.social_security)]);
-        if (num(pr.late_deduct) > 0)     fixedDed.push(['หักสาย', R(pr.late_deduct)]);
-        if (num(pr.leave_deduct) > 0)    fixedDed.push(['ลา/ขาด', R(pr.leave_deduct)]);
-        const expTotal = fixedDed.reduce((sm,x) => sm + x[1], 0) + cashReal + tagDeds.reduce((sm,t) => sm + R(t.amount), 0);
-        const dedHtml =
-          fixedDed.map(x => row(x[0], x[1], "red")).join("") +
-          (cashReal > 0 ? row('เบิกเงินสด', cashReal, "red") : "") +
-          tagDeds.map(t => row(t.name, R(t.amount), "red")).join("");
-
-        // ── รายได้: รวมรายได้ = รวมหัก + รับสิ้นเดือน (ค่าแรงรับเศษให้ลงตัว) ──
-        const incTotal = expTotal + mEnd;
+        // ── รายได้: เงินเดือน(permanent)=เต็มเดือน / ค่าแรง(trial)=ตามวัน — ยอดสะอาด ──
+        const isPerm   = (emp.emp_type === 'permanent');
+        const dRate    = num(emp.daily_rate);
+        const mSalary  = num(emp.monthly_salary);
+        const fullDays = (isPerm && dRate > 0) ? Math.round(mSalary / dRate) : num(pr.work_days);
+        const absenceAmt  = isPerm ? Math.max(0, mSalary - num(pr.base_wage) - num(pr.holiday_wage)) : 0;
+        const absenceDays = (absenceAmt > 0.5 && dRate > 0) ? (Math.round(absenceAmt / dRate * 10) / 10) : 0;
+        const wageAmt   = isPerm ? R(mSalary) : R(num(pr.base_wage) + num(pr.holiday_wage));
+        const wageLabel = isPerm ? ('เงินเดือน (' + fullDays + ' วัน)') : ('ค่าแรง (' + num(pr.work_days) + ' วัน)');
         const otherInc = [];
         if (num(pr.ot_amount) > 0)          otherInc.push(['OT (' + num(pr.ot_hours) + ' ชม.)', R(pr.ot_amount), 'green']);
         if (num(pr.diligence_bonus) > 0)    otherInc.push(['เบี้ยขยัน', R(pr.diligence_bonus), 'green']);
@@ -484,9 +473,27 @@ export default function WeeklyPage({ role }) {
         const incItems2 = (l.income_items || []).filter(it => Number(it.amount) > 0);
         if (incItems2.length) incItems2.forEach(it => otherInc.push([esc(it.label), R(it.amount), 'green']));
         else if (num(pr.other_income) > 0) otherInc.push(['รายได้พิเศษ', R(pr.other_income), 'green']);
-        const otherIncSum = otherInc.reduce((sm, x) => sm + x[1], 0);
-        const wageShow = incTotal - otherIncSum;
-        const incHtml = row('ค่าแรง (' + num(pr.work_days) + ' วัน)', wageShow) + otherInc.map(x => row(x[0], x[1], x[2])).join("");
+        const incTotal = wageAmt + otherInc.reduce((sm, x) => sm + x[1], 0);
+        const incHtml = row(wageLabel, wageAmt) + otherInc.map(x => row(x[0], x[1], x[2])).join("");
+
+        // ── รายการหัก: เพิ่ม "ขาดงาน" (permanent) + รวมค่าแรงเสาร์เข้า "เบิกเงินสด" (รับเศษ) ──
+        const expTotal = incTotal - mEnd;
+        const DED_ORDER = ["ค่าแม็กโคร","เงินกู้ยืม","เงินกู้ กยศ.","ค่าสินค้าชำรุด","อื่นๆ"];
+        const tagDeds = (dedByType[l.employee_id] || [])
+          .filter(t => num(t.amount) > 0 && t.name !== "เบิกเงินสด")
+          .sort((a,b) => ((DED_ORDER.indexOf(a.name)+1) || 99) - ((DED_ORDER.indexOf(b.name)+1) || 99));
+        const fixedDed = [];
+        if (num(pr.job_insurance) > 0)   fixedDed.push(['ประกันงาน', R(pr.job_insurance)]);
+        if (num(pr.social_security) > 0) fixedDed.push(['ประกันสังคม', R(pr.social_security)]);
+        if (absenceAmt > 0.5)            fixedDed.push(['ขาดงาน ' + absenceDays + ' วัน', R(absenceAmt)]);
+        if (num(pr.late_deduct) > 0)     fixedDed.push(['หักสาย', R(pr.late_deduct)]);
+        if (num(pr.leave_deduct) > 0)    fixedDed.push(['ลา/ขาด', R(pr.leave_deduct)]);
+        const otherDedSum = fixedDed.reduce((sm, x) => sm + x[1], 0) + tagDeds.reduce((sm, t) => sm + R(t.amount), 0);
+        const cashShow = expTotal - otherDedSum;
+        const dedHtml =
+          fixedDed.map(x => row(x[0], x[1], "red")).join("") +
+          (cashShow > 0 ? row('เบิกเงินสด', cashShow, "red") : "") +
+          tagDeds.map(t => row(t.name, R(t.amount), "red")).join("");
         const baseInfo = (num(emp.monthly_salary) > 0 || num(emp.daily_rate) > 0)
           ? `<div class="baseinfo">ฐานเงินเดือน ${money(emp.monthly_salary)} · วันละ ${money(emp.daily_rate)} บ.</div>` : "";
         const rfParts = [];
