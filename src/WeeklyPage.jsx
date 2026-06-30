@@ -503,38 +503,38 @@ export default function WeeklyPage({ role }) {
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family:'Sarabun','Tahoma',sans-serif; color:#1e293b; }
         @page { size:A4 portrait; margin:0; }
-        .sheet { width:210mm; height:297mm; padding:12mm 14mm; page-break-after:always; }
+        .sheet { width:210mm; height:297mm; padding:9mm 12mm; page-break-after:always; display:flex; flex-direction:column; }
         .sheet:last-child { page-break-after:auto; }
-        .cut { border-top:1px dashed #94a3b8; margin:6mm 0; position:relative; }
-        .cut::after { content:"✂"; position:absolute; left:-2mm; top:-3mm; font-size:11px; color:#94a3b8; }
-        .slip { border:1px solid #cbd5e1; border-radius:6px; padding:8mm 10mm; }
-        .head { text-align:center; border-bottom:2px solid #1e3a5f; padding-bottom:4mm; margin-bottom:4mm; }
-        .co { font-size:18px; font-weight:800; color:#1e3a5f; }
-        .sub { font-size:13px; color:#64748b; margin-top:2px; }
-        .who { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:5mm; }
-        .name { font-size:16px; font-weight:700; }
-        .fullname { font-size:12px; color:#475569; margin-top:1mm; }
-        .cyc { font-size:12px; color:#64748b; white-space:nowrap; }
-        .body { font-size:14px; }
-        .row { display:flex; justify-content:space-between; padding:2.2mm 0; }
+        .cut { border-top:1px dashed #94a3b8; margin:3.5mm 0; position:relative; }
+        .cut::after { content:"✂"; position:absolute; left:-2mm; top:-3mm; font-size:10px; color:#94a3b8; }
+        .slip { border:1px solid #cbd5e1; border-radius:6px; padding:5mm 7mm; page-break-inside:avoid; }
+        .head { text-align:center; border-bottom:1.5px solid #1e3a5f; padding-bottom:2mm; margin-bottom:2.5mm; }
+        .co { font-size:15px; font-weight:800; color:#1e3a5f; }
+        .sub { font-size:11px; color:#64748b; margin-top:1px; }
+        .who { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:2.5mm; }
+        .name { font-size:14px; font-weight:700; }
+        .fullname { font-size:11px; color:#475569; margin-top:0.5mm; }
+        .cyc { font-size:11px; color:#64748b; white-space:nowrap; }
+        .body { font-size:12.5px; }
+        .row { display:flex; justify-content:space-between; padding:1.3mm 0; }
         .row span:last-child { font-variant-numeric:tabular-nums; }
-        .note { font-size:11px; color:#64748b; padding:0 0 1.5mm; }
+        .note { font-size:10px; color:#64748b; padding:0 0 1mm; }
         .green { color:#166534; }
         .red { color:#b91c1c; }
-        .line { border-top:1px solid #e2e8f0; margin:1.5mm 0; }
-        .total { font-size:17px; font-weight:800; color:#1e3a5f; padding-top:2mm; }
-        .mini-h { font-size:11px; color:#64748b; font-weight:700; margin:1mm 0 0.5mm; }
-        .row.mini { font-size:12px; padding:1.2mm 0; }
-        .baseinfo { font-size:11px; color:#64748b; margin-bottom:2mm; }
-        .cols { display:flex; gap:10mm; margin:1mm 0 2mm; }
+        .line { border-top:1px solid #e2e8f0; margin:1mm 0; }
+        .total { font-size:14.5px; font-weight:800; color:#1e3a5f; padding-top:1.2mm; }
+        .mini-h { font-size:10px; color:#64748b; font-weight:700; margin:1mm 0 0.5mm; }
+        .row.mini { font-size:11px; padding:1mm 0; }
+        .baseinfo { font-size:10px; color:#64748b; margin-bottom:1mm; }
+        .cols { display:flex; gap:8mm; margin:0.5mm 0 1mm; }
         .col { flex:1; min-width:0; }
-        .col-h { font-size:12px; font-weight:700; color:#1e3a5f; border-bottom:1px solid #cbd5e1; padding-bottom:1mm; margin-bottom:1mm; }
-        .row.col-row { font-size:12.5px; padding:1.3mm 0; }
+        .col-h { font-size:11px; font-weight:700; color:#1e3a5f; border-bottom:1px solid #cbd5e1; padding-bottom:0.7mm; margin-bottom:0.7mm; }
+        .row.col-row { font-size:11.5px; padding:0.9mm 0; }
         .row.sub { font-weight:700; color:#1e3a5f; }
-        .sign { margin-top:10mm; text-align:right; }
-        .sigline { border-bottom:1px solid #1e293b; width:60mm; margin-left:auto; }
-        .siglabel { font-size:12px; color:#64748b; margin-top:1.5mm; }
-        .sigdate { font-size:12px; color:#64748b; margin-top:2mm; }
+        .sign { margin-top:5mm; text-align:right; }
+        .sigline { border-bottom:1px solid #1e293b; width:55mm; margin-left:auto; }
+        .siglabel { font-size:10px; color:#64748b; margin-top:1mm; }
+        .sigdate { font-size:10px; color:#64748b; margin-top:1.2mm; }
       </style></head><body>${sheets.join("")}</body></html>`;
 
     const iframe = document.createElement("iframe");
