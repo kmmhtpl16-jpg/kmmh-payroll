@@ -71,6 +71,14 @@ export async function saveAttendanceToSupabase(
   }
 
   // ── Step 1: สร้าง import record ───────────────────────────
+  // 🔧 has_errors ไม่นับแถว "วันนี้ยังไม่จบ" (สแกนเข้าแล้วยังไม่สแกนออก) — เลี่ยง ⚠️ หลอกตอนดึงไฟล์กลางวัน
+  //    แถวพวกนี้ยังขึ้นในแท็บแก้ไขย้อนหลังตามเดิม และจะถูกทับเมื่ออัปไฟล์เต็มวันรอบหน้า
+  const todayBKK = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+  const isTodayUnfinished = (r) =>
+    r.work_date === todayBKK &&
+    /ยังไม่สแกนออก|มีแค่เข้าเช้า/.test(r.hr_note || "");
+  const hasRealErrors = rows.some((r) => r.needs_hr_review && !isTodayUnfinished(r));
+
   const { data: importData, error: importErr } = await supabase
     .from("attendance_imports")
     .insert({
@@ -78,7 +86,7 @@ export async function saveAttendanceToSupabase(
       date_from: dateFrom,
       date_to: dateTo,
       total_rows: rows.length,
-      has_errors: rows.some((r) => r.needs_hr_review),
+      has_errors: hasRealErrors,
     })
     .select("id")
     .single();
