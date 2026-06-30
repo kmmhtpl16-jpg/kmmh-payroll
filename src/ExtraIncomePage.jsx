@@ -8,7 +8,9 @@
 //   ── เอา "เงินประจำตำแหน่ง" ออก เพราะระบบคำนวณ+รวมในเงินเดือนให้แล้ว
 //      (ตั้งค่าคงที่ในโปรไฟล์พนักงาน) — คีย์ที่นี่จะนับซ้ำ
 //   ── เบี้ยขยันก็เช่นกัน: ระบบคิดเองจากการสแกน ไม่ต้องคีย์
-// 🔧 v3: เพิ่มช่องค้นหา (ชื่อ / ประเภท / หมายเหตุ) กรองรายการในงวด
+//
+// 🔧 v3: เพิ่มแถบ "ยอด KPI นับสต๊อก รอยืนยัน" — เจ้าของปิดงวดจากแอป KPI (คลังตำหนิ/kmmh-stock)
+//        แล้วยอดมาเป็น proposal สถานะ pending HR กดยืนยันถึงจะเข้ารายได้พิเศษจริง
 //
 // เพิ่มแท็บใน App.jsx:
 //   import ExtraIncomePage from "./ExtraIncomePage";
@@ -19,13 +21,6 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 
 const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// แปลงสตริงวันที่ "YYYY-MM-DD" (ค.ศ.) → "DD/MM/พ.ศ." (แสดงผลเท่านั้น — เก็บยังเป็น ค.ศ.)
-const toBE = (iso) => {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${Number(y) + 543}`;
-};
 
 // ── โทนเขียว ──
 const GREEN = "#16a34a";
@@ -57,9 +52,8 @@ export default function ExtraIncomePage({ role }) {
   const [periodId,  setPeriodId]  = useState("");
   const [employees, setEmployees] = useState([]);
   const [entries,   setEntries]   = useState([]); // รายการทุกคนในงวด
-  const [proposals, setProposals] = useState([]); // ข้อเสนอค่าเที่ยวจากระบบจัดส่ง (รอตรวจ)
   const [loading,   setLoading]   = useState(false);
-  const [query,     setQuery]     = useState("");   // 🔍 ค้นหา (ชื่อ/ประเภท/โน้ต)
+  const [kpiProps,  setKpiProps]  = useState([]); // ยอด KPI นับสต๊อก รอ HR ยืนยัน
 
   // cache ยอดจากระบบ ราย employee_id → {ot:{hours,amount}|null}
   const [sysCache, setSysCache] = useState({});
@@ -108,11 +102,11 @@ export default function ExtraIncomePage({ role }) {
     })();
   }, []);
 
-  // ── เมื่อเปลี่ยน period → โหลดรายการ + หา cycle เสาร์ถัดไป ──
+  // ── เมื่อเปลี่ยน period → โหลดรายการ + ยอด KPI รอยืนยัน + หา cycle เสาร์ถัดไป ──
   useEffect(() => {
     if (!periodId) return;
     loadEntries();
-    loadProposals();
+    loadKpiProps();
     (async () => {
       const { data: cyc } = await supabase
         .from("pay_cycles")
@@ -136,56 +130,39 @@ export default function ExtraIncomePage({ role }) {
     setLoading(false);
   }
 
-  // ── โหลดข้อเสนอค่าเที่ยวจากระบบจัดส่ง (สถานะ pending) ──
-  async function loadProposals() {
+  // ── โหลดยอด KPI นับสต๊อกที่ "รอ HR ยืนยัน" ของเดือนนี้ ──
+  async function loadKpiProps() {
+    const per = periods.find((p) => p.id === periodId);
+    if (!per) { setKpiProps([]); return; }
     const { data } = await supabase
-      .from("trip_pay_proposals")
+      .from("kpi_pay_proposals")
       .select("*")
-      .eq("period_id", periodId)
+      .eq("pay_year", per.year)
+      .eq("pay_month", per.month)
       .eq("status", "pending")
-      .order("amount", { ascending: false });
-    setProposals(data || []);
+      .order("created_at", { ascending: true });
+    setKpiProps(data || []);
   }
-
-  // ── ช่วงเวลา (ระยะเวลา) จาก proposal → "1–25 มิ.ย. 69" (พ.ศ., ย่อ) ──
-  function cycleRangeBE(detail) {
-    const c = detail?.cycle;
-    if (!c?.start || !c?.end) return "";
-    const M = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
-    const [sy, sm, sd] = c.start.split("-").map(Number);
-    const [ey, em, ed] = c.end.split("-").map(Number);
-    const beY = (ey + 543) % 100;
-    // เดือนเดียวกัน → "1–25 มิ.ย. 69" ; ต่างเดือน → "26 พ.ค.–25 มิ.ย. 69"
-    if (sm === em && sy === ey) return `${sd}–${ed} ${M[em]} ${beY}`;
-    return `${sd} ${M[sm]}–${ed} ${M[em]} ${beY}`;
+  async function approveKpi(id) {
+    const { data, error } = await supabase.rpc("kpi_approve_proposal", { p_id: id });
+    if (error || !data?.ok) return flash("ยืนยันไม่สำเร็จ: " + (data?.error || error?.message || ""), "err");
+    flash("ยืนยันเข้าจ่ายแล้ว ✓");
+    loadKpiProps(); loadEntries();
   }
-
-  // ใช้ยอดข้อเสนอ → เติมลงฟอร์ม (HR ตรวจแล้วค่อยกดบันทึกเอง ไม่ลงอัตโนมัติ)
-  function usePropose(p) {
-    const range = cycleRangeBE(p.detail);
-    setForm((f) => ({
-      ...f,
-      employee_id: p.employee_id,
-      income_type: "other",
-      label: range ? `ค่าเที่ยว (${range})` : "ค่าเที่ยว",
-      amount: String(p.amount),
-      note: range ? `${p.trips} เที่ยว · ${range}` : `${p.trips} เที่ยว`,
-      disburse_on: "month_end",
-      _systemAmount: null,
-    }));
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-    flash("เติมยอดในฟอร์มแล้ว — ตรวจสอบก่อนกดบันทึก");
+  async function rejectKpi(id) {
+    if (!confirm("ปฏิเสธยอด KPI รายการนี้? (จะไม่เข้าจ่าย)")) return;
+    const { data, error } = await supabase.rpc("kpi_reject_proposal", { p_id: id });
+    if (error || !data?.ok) return flash("ปฏิเสธไม่สำเร็จ: " + (data?.error || error?.message || ""), "err");
+    flash("ปฏิเสธแล้ว");
+    loadKpiProps();
   }
-
-  // ทำเครื่องหมายว่าตรวจแล้ว → ซ่อนแถบเตือนของคนนี้
-  async function reviewProposal(p) {
-    if (!confirm("ทำเครื่องหมายว่าตรวจแล้ว? แถบเตือนของคนนี้จะหายไป")) return;
-    const { error } = await supabase
-      .from("trip_pay_proposals")
-      .update({ status: "reviewed", updated_at: new Date().toISOString() })
-      .eq("id", p.id);
-    if (error) return flash("อัปเดตไม่สำเร็จ: " + error.message, "err");
-    loadProposals();
+  async function approveAllKpi() {
+    if (!confirm("ยืนยันยอด KPI ทั้งหมดเข้าจ่าย?")) return;
+    for (const p of kpiProps) {
+      await supabase.rpc("kpi_approve_proposal", { p_id: p.id });
+    }
+    flash("ยืนยันทั้งหมดแล้ว ✓");
+    loadKpiProps(); loadEntries();
   }
 
   // ── ดึงยอด OT จากระบบเมื่อเลือกคน ──
@@ -312,30 +289,16 @@ export default function ExtraIncomePage({ role }) {
     loadEntries();
   }
 
-  // ── helper: ชื่อ/ประเภท ──
+  // ── จัดกลุ่มรายการตามพนักงาน ──
+  const grouped = {};
+  for (const e of entries) {
+    if (!grouped[e.employee_id]) grouped[e.employee_id] = [];
+    grouped[e.employee_id].push(e);
+  }
   const empMap = Object.fromEntries(employees.map((e) => [e.id, e]));
 
   const typeLabel = (e) =>
     e.income_type === "other" ? e.label : INCOME_TYPES.find((t) => t.value === e.income_type)?.label || e.income_type;
-
-  // 🔍 ค้นหา — ชื่อพนักงาน / ประเภท / หมายเหตุ
-  const q = query.trim().toLowerCase();
-  const matchEntry = (e) => {
-    if (!q) return true;
-    const emp = empMap[e.employee_id];
-    const typeName = INCOME_TYPES.find((t) => t.value === e.income_type)?.label || e.income_type;
-    const hay = [emp?.nickname, emp?.emp_code, e.label, typeName, e.income_type, e.amount_note]
-      .filter(Boolean).join(" ").toLowerCase();
-    return hay.includes(q);
-  };
-
-  // ── จัดกลุ่มรายการตามพนักงาน (กรองด้วยค้นหา) ──
-  const grouped = {};
-  for (const e of entries) {
-    if (!matchEntry(e)) continue;
-    if (!grouped[e.employee_id]) grouped[e.employee_id] = [];
-    grouped[e.employee_id].push(e);
-  }
 
   // ── UI ──
   return (
@@ -400,7 +363,7 @@ export default function ExtraIncomePage({ role }) {
           </div>
           {form.disburse_on === "saturday" && (
             <p style={S.hintCenter}>
-              {nextCycle ? `→ จะจ่ายรอบเสาร์ ${toBE(nextCycle.cycle_date)}` : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
+              {nextCycle ? `→ จะจ่ายรอบเสาร์ ${nextCycle.cycle_date}` : "⚠️ ไม่มีรอบเสาร์ที่เปิดอยู่"}
             </p>
           )}
 
@@ -430,7 +393,6 @@ export default function ExtraIncomePage({ role }) {
               <label style={S.lbl}>วันที่ทำรายการ</label>
               <input style={S.input} type="date" value={form.entry_date}
                 onChange={(e) => setForm((f) => ({ ...f, entry_date: e.target.value }))} />
-              {form.entry_date && <div style={S.beHint}>= {toBE(form.entry_date)} (พ.ศ.)</div>}
             </div>
           </div>
 
@@ -447,41 +409,34 @@ export default function ExtraIncomePage({ role }) {
         </div>
       )}
 
-      {/* ── 📨 ข้อเสนอค่าเที่ยวจากระบบจัดส่ง (รอตรวจ) ── */}
-      {proposals.length > 0 && (
-        <div style={S.proposeCard}>
-          <div style={S.proposeHead}>📨 ค่าเที่ยวจากระบบจัดส่ง — ตรวจสอบก่อนกรอกยอดจริง</div>
-          {proposals.map((p) => (
-            <div key={p.id} style={S.proposeRow}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600 }}>{p.nickname || empMap[p.employee_id]?.nickname || "—"}</div>
-                <div style={S.proposeSub}>ส่งยอดมา <b style={{ color: GREEN_DARK }}>{fmt(p.amount)}</b> บาท · {p.trips} เที่ยว</div>
-              </div>
-              {canEdit && (
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button style={S.useBtn} onClick={() => usePropose(p)}>ใช้ยอดนี้</button>
-                  <button style={S.dismissBtn} onClick={() => reviewProposal(p)} title="ตรวจแล้ว">✓</button>
-                </div>
-              )}
+      {/* ── 📊 ยอด KPI นับสต๊อก รอ HR ยืนยัน ── */}
+      {canEdit && kpiProps.length > 0 && (
+        <div style={S.kpiBox}>
+          <div style={S.kpiHead}>
+            <span>📊 ยอด KPI นับสต๊อก — รอยืนยันเข้าจ่าย ({kpiProps.length})</span>
+            <button style={S.kpiAllBtn} onClick={approveAllKpi}>ยืนยันทั้งหมด</button>
+          </div>
+          <div style={S.kpiSub}>เจ้าของปิดงวดจากแอปนับสต๊อกแล้วส่งยอดมา — ตรวจแล้วกด “ยืนยันเข้าจ่าย” เพื่อเพิ่มเข้ารายได้พิเศษ (จ่ายสิ้นเดือน)</div>
+          {kpiProps.map((p) => (
+            <div key={p.id} style={S.kpiRow}>
+              <span style={{ fontWeight: 600 }}>{p.nickname || "—"}</span>
+              <span style={S.kpiTag}>KPI {p.grp} · รอบ {p.period}</span>
+              <span style={S.kpiAmt}>{fmt(p.amount)} บาท</span>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                <button style={S.kpiOk} onClick={() => approveKpi(p.id)}>✓ ยืนยันเข้าจ่าย</button>
+                <button style={S.kpiNo} onClick={() => rejectKpi(p.id)}>✕ ปฏิเสธ</button>
+              </span>
             </div>
           ))}
-          <div style={S.proposeFoot}>ℹ️ ยอดนี้เป็นแค่ข้อเสนอ ระบบยังไม่ลงเงินให้ — กด "ใช้ยอดนี้" เพื่อเติมลงฟอร์มแล้วตรวจก่อนบันทึก</div>
         </div>
       )}
 
       {/* ── รายการในงวด (จัดกลุ่มตามคน) ── */}
       <h3 style={S.listTitle}>💰 รายได้พิเศษในงวดนี้</h3>
-
-      {/* ── 🔍 ช่องค้นหา ── */}
-      <input type="text" value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="🔍 ค้นหา — ชื่อ / ประเภท / หมายเหตุ"
-        style={S.searchInput} />
-
       {loading ? (
         <p style={S.hint}>กำลังโหลด...</p>
-      ) : Object.keys(grouped).length === 0 ? (
-        <p style={S.hint}>{q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีรายได้พิเศษในงวดนี้"}</p>
+      ) : entries.length === 0 ? (
+        <p style={S.hint}>ยังไม่มีรายได้พิเศษในงวดนี้</p>
       ) : (
         Object.entries(grouped).map(([empId, list]) => {
           const emp = empMap[empId];
@@ -548,8 +503,6 @@ const S = {
   lbl: { display: "block", fontSize: "0.8rem", color: "#6b7280", marginBottom: 4 },
   select: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
   input: { width: "100%", padding: "0.55rem", borderRadius: 8, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box" },
-  searchInput: { width: "100%", padding: "0.7rem 0.9rem", borderRadius: 10, border: "1px solid #d1d5db", fontSize: "0.95rem", boxSizing: "border-box", marginBottom: 12, background: "#fff", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
-  beHint: { fontSize: "0.72rem", color: "#9ca3af", marginTop: 4 },
   cycleRow: { display: "flex", gap: 12, marginTop: 6 },
   cycleCard: { flex: 1, border: "2px solid #e5e7eb", borderRadius: 10, padding: "0.8rem", cursor: "pointer", textAlign: "center", transition: "all 0.15s" },
   cycleDesc: { fontSize: "0.75rem", color: "#9ca3af", marginTop: 4 },
@@ -576,12 +529,15 @@ const S = {
   editInput: { padding: "0.4rem", borderRadius: 6, border: "1px solid #d1d5db", fontSize: "0.85rem" },
   miniSave: { border: "none", background: GREEN, color: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
   miniCancel: { border: "1px solid #d1d5db", background: "#fff", borderRadius: 6, padding: "4px 10px", cursor: "pointer" },
-  proposeCard: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "0.9rem 1rem", marginBottom: 18 },
-  proposeHead: { fontWeight: 700, color: "#1d4ed8", fontSize: "0.95rem", marginBottom: 10 },
-  proposeRow: { display: "flex", alignItems: "center", gap: 8, padding: "0.5rem 0", borderTop: "1px solid #dbeafe" },
-  proposeSub: { fontSize: "0.82rem", color: "#475569", marginTop: 2 },
-  useBtn: { border: "none", background: "#2563eb", color: "#fff", borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: "0.85rem", fontWeight: 600 },
-  dismissBtn: { border: "1px solid #cbd5e1", background: "#fff", color: "#475569", borderRadius: 7, padding: "6px 10px", cursor: "pointer" },
-  proposeFoot: { fontSize: "0.75rem", color: "#64748b", marginTop: 10, lineHeight: 1.5 },
   toast: { position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", padding: "0.6rem 1.2rem", borderRadius: 8, color: "#fff", fontSize: "0.9rem", zIndex: 1000, boxShadow: "0 2px 8px rgba(0,0,0,0.15)" },
+  // ── KPI proposals banner ──
+  kpiBox: { background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "1rem", marginBottom: 16 },
+  kpiHead: { display: "flex", justifyContent: "space-between", alignItems: "center", fontWeight: 700, color: "#1e3a8a", fontSize: "1rem", gap: 8, flexWrap: "wrap" },
+  kpiSub: { fontSize: "0.78rem", color: "#475569", marginTop: 2, marginBottom: 8 },
+  kpiAllBtn: { border: "none", background: "#2563eb", color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: "0.82rem", cursor: "pointer", fontWeight: 600 },
+  kpiRow: { display: "flex", alignItems: "center", gap: 8, padding: "0.5rem 0", borderTop: "1px solid #dbeafe", flexWrap: "wrap" },
+  kpiTag: { fontSize: "0.78rem", color: "#1e40af", background: "#dbeafe", padding: "2px 8px", borderRadius: 6 },
+  kpiAmt: { fontWeight: 700, color: "#1f2937" },
+  kpiOk: { border: "none", background: "#16a34a", color: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: "0.82rem", cursor: "pointer", fontWeight: 600 },
+  kpiNo: { border: "1px solid #fecaca", background: "#fff", color: "#dc2626", borderRadius: 8, padding: "6px 12px", fontSize: "0.82rem", cursor: "pointer" },
 };
