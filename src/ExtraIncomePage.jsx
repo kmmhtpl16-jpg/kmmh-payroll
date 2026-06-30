@@ -130,15 +130,12 @@ export default function ExtraIncomePage({ role }) {
     setLoading(false);
   }
 
-  // ── โหลดยอด KPI นับสต๊อกที่ "รอ HR ยืนยัน" ของเดือนนี้ ──
+  // ── โหลดยอด KPI นับสต๊อกที่ "รอ HR ยืนยัน" (ทุกเดือน — ไม่ผูกกับเดือนที่เลือก
+  //    เพราะรอบนับ KPI อาจคนละเดือนกับ pay_period ที่ HR กำลังดู) ──
   async function loadKpiProps() {
-    const per = periods.find((p) => p.id === periodId);
-    if (!per) { setKpiProps([]); return; }
     const { data } = await supabase
       .from("kpi_pay_proposals")
       .select("*")
-      .eq("pay_year", per.year)
-      .eq("pay_month", per.month)
       .eq("status", "pending")
       .order("created_at", { ascending: true });
     setKpiProps(data || []);
