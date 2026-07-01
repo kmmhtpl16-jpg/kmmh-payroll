@@ -25,6 +25,26 @@ const toBE = (iso) => {
   return `${d}/${m}/${Number(y) + 543}`
 }
 
+
+// 🆕 ทดลองงาน: ครบ 120 วัน (นับตามปฏิทินจากวันเริ่มทดลองงาน) แล้วพิจารณาปรับประจำ
+const PROBATION_DAYS = 120
+// คืน { dayCount, remaining, dueIso } — dayCount นับวันเริ่ม = วันที่ 1 (inclusive)
+//   remaining < 0 = เลยกำหนดมาแล้ว, dueIso = วันครบ 120 (วันที่ทำงานครบวันที่ 120)
+function trialProgress(startIso) {
+  if (!startIso) return null
+  const [y, m, d] = String(startIso).slice(0, 10).split('-').map(Number)
+  if (!y || !m || !d) return null
+  const MS = 86400000
+  const start = new Date(y, m - 1, d)                          // parse แบบ local กัน UTC เพี้ยน
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const dayCount = Math.round((today - start) / MS) + 1        // วันเริ่ม = วันที่ 1
+  const remaining = PROBATION_DAYS - dayCount
+  const due = new Date(start.getTime() + (PROBATION_DAYS - 1) * MS)
+  const dueIso = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`
+  return { dayCount, remaining, dueIso }
+}
+
 const EMPTY_FORM = {
   emp_code: '', nickname: '', full_name: '',
   emp_type: 'trial', monthly_salary: '', daily_rate: '',
@@ -335,6 +355,23 @@ export default function EmployeesPage() {
                     <span style={{ background: e.emp_type === 'permanent' ? '#E6F1FB' : '#FAEEDA', color: e.emp_type === 'permanent' ? '#0C447C' : '#633806', padding: '3px 8px', borderRadius: 99, fontSize: 11, fontWeight: 500 }}>
                       {e.emp_type === 'permanent' ? 'ประจำ' : 'ทดลองงาน'}
                     </span>
+                    {e.emp_type === 'trial' && (() => {
+                      const p = trialProgress(e.trial_start_date)
+                      if (!p) return (
+                        <div style={{ fontSize: 10.5, color: '#B26A00', marginTop: 4 }}>ยังไม่ระบุวันเริ่มทดลองงาน</div>
+                      )
+                      const over = p.remaining <= 0
+                      const near = p.remaining > 0 && p.remaining <= 14
+                      const col = over ? '#A32D2D' : near ? '#B26A00' : '#777'
+                      return (
+                        <div style={{ fontSize: 10.5, color: col, marginTop: 4, lineHeight: 1.45, fontWeight: (over || near) ? 600 : 400 }}>
+                          {over
+                            ? `⚠️ ครบ 120 วันแล้ว (เกิน ${Math.abs(p.remaining)} วัน)`
+                            : `ทำงาน ${p.dayCount}/120 วัน · เหลือ ${p.remaining} วัน`}
+                          <div style={{ color: '#999', fontWeight: 400 }}>ครบกำหนด {toBE(p.dueIso)}</div>
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td style={{ padding: '10px 12px' }}>{fmtRate(e.daily_rate)} บ.</td>
                   <td style={{ padding: '10px 12px' }}>{e.monthly_salary ? fmtRate(e.monthly_salary) + ' บ.' : '-'}</td>
@@ -448,6 +485,18 @@ export default function EmployeesPage() {
                 <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>วันเริ่มทดลองงาน</div>
                 <input type="date" value={form.trial_start_date} onChange={e => setF('trial_start_date', e.target.value)}
                   style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                {form.emp_type === 'trial' && form.trial_start_date && (() => {
+                  const p = trialProgress(form.trial_start_date)
+                  if (!p) return null
+                  const over = p.remaining <= 0
+                  return (
+                    <div style={{ fontSize: 10.5, color: over ? '#A32D2D' : '#0C447C', marginTop: 3, lineHeight: 1.45 }}>
+                      {over
+                        ? `⚠️ ครบ 120 วันแล้ว (เกิน ${Math.abs(p.remaining)} วัน) — ควรพิจารณาปรับประจำ`
+                        : `ทดลองงานมาแล้ว ${p.dayCount} วัน · เหลืออีก ${p.remaining} วันครบ 120 (ครบ ${toBE(p.dueIso)})`}
+                    </div>
+                  )
+                })()}
               </div>
 
               {form.emp_type === 'permanent' && (
