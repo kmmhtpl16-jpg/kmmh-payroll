@@ -11,6 +11,19 @@ const toBE = (iso) => {
   return `${d}/${m}/${Number(y) + 543}`;
 };
 
+// ── ตัวช่วยเรื่องเดือน (ใช้กรอง "แสดงเฉพาะเดือนที่เลือก") ──
+const TH_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const monthKey = (iso) => (iso ? iso.slice(0, 7) : "");
+const monthLabelBE = (key) => {
+  if (!key) return "";
+  const [y, m] = key.split("-");
+  return `${TH_MONTHS[Number(m)]} ${Number(y) + 543}`;
+};
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 // ประเภทการแจ้งค่าเสียหาย
 const reportLabel = (r) =>
   r === "self_reported" ? "🙋 แจ้งเอง" : r === "caught" ? "🔍 ถูกจับได้" : "—";
@@ -32,6 +45,7 @@ export default function DeductionsPage({ role }) {
   const [deductions,     setDeductions]     = useState([]);
   const [loading,        setLoading]        = useState(false);
   const [query,          setQuery]          = useState("");   // 🔍 ค้นหา (ชื่อ/ประเภท/โน้ต)
+  const [monthFilter,    setMonthFilter]    = useState(currentMonthKey()); // 📅 กรองเดือน
 
   // ── form state ──
   const [form, setForm] = useState({
@@ -207,13 +221,25 @@ export default function DeductionsPage({ role }) {
     return hay.includes(q);
   };
 
+  // 📅 กรองเดือน — "all" = แสดงทั้งหมด
+  const inMonth = (d) => monthFilter === "all" || monthKey(d.deduct_date) === monthFilter;
+
+  const availableMonths = Array.from(
+    new Set([currentMonthKey(), ...deductions.map(d => monthKey(d.deduct_date)).filter(Boolean)])
+  ).sort((a, b) => b.localeCompare(a));
+
   const summary = employees.map(emp => {
-    const rows = deductions.filter(d => d.employee_id === emp.id && !d.is_paid && matchRow(d, emp));
+    const rows = deductions.filter(d => d.employee_id === emp.id && !d.is_paid && matchRow(d, emp) && inMonth(d));
     if (rows.length === 0) return null;
     return { emp, rows, total: rows.reduce((s, r) => s + Number(r.amount), 0) };
   }).filter(Boolean);
 
-  const paidRows = deductions.filter(d => d.is_paid && matchRow(d, d.employees));
+  const paidRows = deductions.filter(d => d.is_paid && matchRow(d, d.employees) && inMonth(d));
+
+  // ⚠️ เตือน: มีรายการค้างหักของเดือนอื่นที่ไม่ได้แสดง
+  const unpaidOtherMonths = monthFilter === "all"
+    ? 0
+    : deductions.filter(d => !d.is_paid && monthKey(d.deduct_date) !== monthFilter).length;
 
   return (
     <div style={s.page}>
@@ -362,6 +388,28 @@ export default function DeductionsPage({ role }) {
         </button>
       </div>
 
+      {/* ── 📅 เลือกเดือน (default = เดือนปัจจุบัน) ── */}
+      <div style={s.monthBar}>
+        <span style={s.monthBarLabel}>📅 เดือน</span>
+        <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} style={s.monthSelect}>
+          {availableMonths.map(mk => (
+            <option key={mk} value={mk}>
+              {monthLabelBE(mk)}{mk === currentMonthKey() ? " (เดือนนี้)" : ""}
+            </option>
+          ))}
+          <option value="all">— แสดงทั้งหมด —</option>
+        </select>
+        {monthFilter !== "all" && monthFilter !== currentMonthKey() && (
+          <button onClick={() => setMonthFilter(currentMonthKey())} style={s.monthTodayBtn}>กลับเดือนนี้</button>
+        )}
+      </div>
+
+      {unpaidOtherMonths > 0 && (
+        <div style={s.otherMonthWarn}>
+          ⚠️ ยังมีรายการ <b>ค้างหัก {unpaidOtherMonths} รายการ</b> ในเดือนอื่นที่ยังไม่ถูกหัก — เลือก <b>"แสดงทั้งหมด"</b> เพื่อดูให้ครบ
+        </div>
+      )}
+
       {/* ── 🔍 ช่องค้นหา (กรองทั้งรายการค้างหัก + ประวัติ) ── */}
       <input type="text" value={query}
         onChange={e => setQuery(e.target.value)}
@@ -374,7 +422,7 @@ export default function DeductionsPage({ role }) {
         {loading && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
         {!loading && summary.length === 0 && (
           <p style={{ color:"#9ca3af", textAlign:"center", padding:24 }}>
-            {q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีรายจ่ายค้างอยู่"}
+            {q ? "ไม่พบรายการที่ค้นหา" : monthFilter === "all" ? "ยังไม่มีรายจ่ายค้างอยู่" : `ไม่มีรายจ่ายค้างในเดือน ${monthLabelBE(monthFilter)}`}
           </p>
         )}
         {summary.map(({ emp, rows, total }) => (
@@ -415,10 +463,10 @@ export default function DeductionsPage({ role }) {
 
       {/* ── ประวัติที่หักแล้ว ── */}
       <div style={s.card}>
-        <h3 style={s.cardTitle}>✅ ประวัติที่หักออกแล้ว</h3>
+        <h3 style={s.cardTitle}>✅ ประวัติที่หักออกแล้ว {monthFilter === "all" ? "(ทุกเดือน)" : `· ${monthLabelBE(monthFilter)}`}</h3>
         {paidRows.length === 0 && (
           <p style={{ color:"#9ca3af", textAlign:"center", padding:16, fontSize:13 }}>
-            {q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีประวัติ"}
+            {q ? "ไม่พบรายการที่ค้นหา" : monthFilter === "all" ? "ยังไม่มีประวัติ" : `ไม่มีประวัติหักในเดือน ${monthLabelBE(monthFilter)}`}
           </p>
         )}
         {paidRows.map(row => (
@@ -561,6 +609,11 @@ const s = {
   label:    { display:"block", fontSize:12, color:"#64748b", fontWeight:600, marginBottom:4 },
   input:    { padding:"8px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14, width:"100%", boxSizing:"border-box" },
   searchInput: { padding:"11px 14px", border:"1.5px solid #e2e8f0", borderRadius:10, fontSize:14, width:"100%", boxSizing:"border-box", background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,0.06)" },
+  monthBar:    { display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:"#fff", padding:"10px 14px", borderRadius:10, boxShadow:"0 1px 4px rgba(0,0,0,0.06)" },
+  monthBarLabel:{ fontSize:14, fontWeight:700, color:"#1e3a5f" },
+  monthSelect: { padding:"8px 12px", border:"1.5px solid #cbd5e1", borderRadius:8, fontSize:14, fontWeight:600, color:"#1e3a5f", background:"#f8fafc", cursor:"pointer" },
+  monthTodayBtn:{ padding:"6px 12px", borderRadius:8, border:"1px solid #bfdbfe", background:"#eff6ff", color:"#1d4ed8", cursor:"pointer", fontWeight:600, fontSize:13 },
+  otherMonthWarn:{ background:"#fffbeb", border:"1px solid #fde68a", color:"#92400e", padding:"10px 14px", borderRadius:10, fontSize:13, lineHeight:1.6 },
   select:   { width:"100%", padding:"8px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14 },
   btn:      { padding:"8px 16px", borderRadius:8, border:"1px solid #e2e8f0",
               background:"#f8fafc", cursor:"pointer", fontWeight:600, fontSize:14 },

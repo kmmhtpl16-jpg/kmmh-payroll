@@ -22,6 +22,10 @@ import { supabase } from "./supabaseClient";
 
 const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ชื่อเดือนไทยแบบย่อ (ใช้ทำป้ายเลือกเดือน)
+const TH_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const periodLabel = (p) => (p ? `${TH_MONTHS[Number(p.month)]} ${p.year + 543}` : "");
+
 // ── โทนเขียว ──
 const GREEN = "#16a34a";
 const GREEN_DARK = "#15803d";
@@ -306,21 +310,22 @@ export default function ExtraIncomePage({ role }) {
         </div>
       )}
 
+      {/* ── 📅 เลือกเดือน (บนสุด เห็นทุก role; default = เดือนล่าสุด) ── */}
+      <div style={S.monthBar}>
+        <span style={S.monthBarLabel}>📅 เดือน</span>
+        <select style={S.monthSelect} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
+          {periods.map((p, i) => (
+            <option key={p.id} value={p.id}>
+              {periodLabel(p)}{i === 0 ? " (ล่าสุด)" : ""}{p.is_closed ? " · ปิดแล้ว" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* ── ฟอร์มบันทึก ── */}
       {canEdit && (
         <div style={S.card}>
           <h3 style={S.cardTitle}>➕ บันทึกรายได้พิเศษ</h3>
-
-          <div style={S.row2}>
-            <div style={{ flex: 1 }}>
-              <label style={S.lbl}>เดือน</label>
-              <select style={S.select} value={periodId} onChange={(e) => setPeriodId(e.target.value)}>
-                {periods.map((p) => (
-                  <option key={p.id} value={p.id}>{p.month}/{p.year + 543} {p.is_closed ? "(ปิดแล้ว)" : ""}</option>
-                ))}
-              </select>
-            </div>
-          </div>
 
           <div style={S.row2}>
             <div style={{ flex: 1 }}>
@@ -429,7 +434,7 @@ export default function ExtraIncomePage({ role }) {
       )}
 
       {/* ── รายการในงวด (จัดกลุ่มตามคน) ── */}
-      <h3 style={S.listTitle}>💰 รายได้พิเศษในงวดนี้</h3>
+      <h3 style={S.listTitle}>💰 รายได้พิเศษ · {periodLabel(periods.find((p) => p.id === periodId))}</h3>
       {loading ? (
         <p style={S.hint}>กำลังโหลด...</p>
       ) : entries.length === 0 ? (
@@ -494,6 +499,9 @@ export default function ExtraIncomePage({ role }) {
 // ── Styles (โทนเขียว) ──
 const S = {
   wrap: { maxWidth: 760, margin: "0 auto", padding: "1rem" },
+  monthBar: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "#fff", border: "1px solid #e5e7eb", padding: "10px 14px", borderRadius: 10, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
+  monthBarLabel: { fontSize: "0.95rem", fontWeight: 700, color: GREEN_DARK },
+  monthSelect: { padding: "8px 12px", border: "1.5px solid #d1d5db", borderRadius: 8, fontSize: "0.95rem", fontWeight: 600, color: "#15803d", background: "#f0fdf4", cursor: "pointer" },
   card: { background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "1.2rem", marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" },
   cardTitle: { textAlign: "center", color: GREEN_DARK, fontWeight: 700, fontSize: "1.1rem", marginBottom: 16 },
   row2: { display: "flex", gap: 12, marginBottom: 12 },
