@@ -14,6 +14,10 @@ const fmtMoney = (n) => Number(n || 0).toLocaleString('th-TH', { minimumFraction
 const getInitials = (name) => (name || '??').substring(0, 2)
 const getColor = (i) => COLORS[i % COLORS.length]
 
+// จำนวนวันในเดือนปัจจุบัน (ใช้คิดค่าแรงวันของพนักงานประจำ = เงินเดือน ÷ วันในเดือน)
+// 🆕 ให้ตรงกับ payrollCalc ที่คิด dailyPerm = monthly_salary / daysInMonth
+const daysInCurMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
+
 // แปลงวันที่ ค.ศ. → แสดง พ.ศ. (เช่น 2026-06-17 → 17/06/2569)
 const toBE = (iso) => {
   if (!iso) return '-'
@@ -49,6 +53,16 @@ export default function EmployeesPage() {
   const [resignSaving, setResignSaving] = useState(false)
 
   useEffect(() => { fetchEmployees() }, [])
+
+  // 🆕 ออโต้เติม "ค่าแรงวัน" สำหรับพนักงานประจำ = เงินเดือน ÷ วันในเดือนปัจจุบัน
+  //    (พนักงานประจำไม่ต้องกรอกค่าแรงวันเอง — ระบบคำนวณให้จากเงินเดือน)
+  //    กันลูป: อัปเดตเฉพาะเมื่อค่าที่คำนวณต่างจากค่าปัจจุบัน
+  useEffect(() => {
+    if (form.emp_type === 'permanent' && form.monthly_salary) {
+      const rate = (Number(form.monthly_salary) / daysInCurMonth).toFixed(2)
+      if (form.daily_rate !== rate) setF('daily_rate', rate)
+    }
+  }, [form.emp_type, form.monthly_salary])
 
   async function fetchEmployees() {
     setLoading(true)
@@ -114,8 +128,18 @@ export default function EmployeesPage() {
   function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
   async function saveEmployee() {
-    if (!form.nickname || !form.full_name || !form.daily_rate) {
-      showToast('กรุณากรอก: ชื่อเล่น / ชื่อ-นามสกุล / ค่าแรงวัน', 'error')
+    if (!form.nickname || !form.full_name) {
+      showToast('กรุณากรอก: ชื่อเล่น / ชื่อ-นามสกุล', 'error')
+      return
+    }
+    // 🆕 พนักงานประจำ: ต้องกรอกเงินเดือน (ค่าแรงวันคำนวณให้เอง)
+    if (form.emp_type === 'permanent' && !form.monthly_salary) {
+      showToast('กรุณากรอกเงินเดือน (พนักงานประจำ)', 'error')
+      return
+    }
+    // พนักงานทดลองงาน: ต้องกรอกค่าแรงวัน
+    if (!form.daily_rate) {
+      showToast('กรุณากรอกค่าแรงวัน', 'error')
       return
     }
     setSaving(true)
@@ -323,7 +347,7 @@ export default function EmployeesPage() {
                   </td>
                   <td style={{ padding: '10px 12px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button onClick={async () => { const next=!e.probation; if(next && !window.confirm('เปิดทัณฑ์บน '+e.nickname+' ? ค่าสายคิด 5 บ./นาที')) return; const r=await supabase.from('employees').update({probation:next}).eq('id',e.id); if(r.error){ showToast('แก้ไขไม่ได้: '+r.error.message,'error'); } else { showToast(e.nickname+(next?' เปิดทัณฑ์บนแล้ว':' ปิดทัณฑ์บนแล้ว')); fetchEmployees(); } }} title="โทษทัณฑ์บน: ค่าสาย 5 บ./นาที" style={{ background: e.probation ? '#FCEBEB' : 'none', border: e.probation ? '0.5px solid #E89393' : '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: e.probation ? '#A32D2D' : '#999' }}>{e.probation ? '⚠ ทัณฑ์บน' : 'ทัณฑ์บน'}</button><button onClick={() => openModal(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#555' }}>แก้ไข</button>
+                      <button onClick={() => openModal(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#555' }}>แก้ไข</button>
                       {e.is_active ? (
                         <button onClick={() => openResign(e)} style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#A32D2D' }}>
                           ลาออก
@@ -384,16 +408,32 @@ export default function EmployeesPage() {
 
               {form.emp_type === 'permanent' && (
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>เงินเดือน (บาท)</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>เงินเดือน (บาท) *</div>
                   <input type="number" value={form.monthly_salary} onChange={e => setF('monthly_salary', e.target.value)} placeholder="เช่น 13000"
                     style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
                 </div>
               )}
 
               <div>
-                <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>ค่าแรงวัน (บาท) *</div>
-                <input type="number" value={form.daily_rate} onChange={e => setF('daily_rate', e.target.value)} placeholder="เช่น 400"
-                  style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>
+                  ค่าแรงวัน (บาท) {form.emp_type === 'permanent' ? '' : '*'}
+                </div>
+                <input type="number" value={form.daily_rate}
+                  onChange={e => setF('daily_rate', e.target.value)}
+                  readOnly={form.emp_type === 'permanent'}
+                  placeholder="เช่น 400"
+                  title={form.emp_type === 'permanent' ? 'คำนวณอัตโนมัติจากเงินเดือน — แก้ไม่ได้' : ''}
+                  style={{
+                    width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc',
+                    padding: '0 10px', boxSizing: 'border-box',
+                    background: form.emp_type === 'permanent' ? '#f2f2f0' : '#fff',
+                    color: form.emp_type === 'permanent' ? '#666' : '#000',
+                  }} />
+                {form.emp_type === 'permanent' && (
+                  <div style={{ fontSize: 10.5, color: '#999', marginTop: 3, lineHeight: 1.4 }}>
+                    คิดจากเงินเดือน ÷ {daysInCurMonth} วัน (เดือนนี้) อัตโนมัติ · ตอนคิดเงินจริงระบบหารตามจำนวนวันของแต่ละเดือน
+                  </div>
+                )}
               </div>
 
               <div>
