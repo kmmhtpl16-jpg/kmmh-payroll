@@ -89,6 +89,18 @@ export default function ExtraIncomePage({ role }) {
   // ── โหลด periods + employees ครั้งแรก ──
   useEffect(() => {
     (async () => {
+      // ── v4: สร้างงวดเดือนปัจจุบันอัตโนมัติถ้ายังไม่มี (ให้เดือนใหม่โผล่ในดรอปดาวน์เอง) ──
+      const _now = new Date();
+      const _curY = _now.getFullYear();
+      const _curM = _now.getMonth() + 1;
+      const { data: _exist } = await supabase
+        .from("pay_periods").select("id")
+        .eq("year", _curY).eq("month", _curM).maybeSingle();
+      if (!_exist) {
+        const _dim = new Date(_curY, _curM, 0).getDate();
+        await supabase.from("pay_periods").insert({ year: _curY, month: _curM, days_in_month: _dim });
+      }
+
       const { data: pds } = await supabase
         .from("pay_periods")
         .select("id, year, month, is_closed")
