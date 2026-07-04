@@ -5,6 +5,19 @@ import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtecte
 import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
 
+// ── ตัวช่วยเรื่องเดือน (แสดงเฉพาะเดือนที่เลือก) ──
+const TH_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const monthKeyOf = (iso) => (iso ? String(iso).slice(0, 7) : "");
+const monthLabelBE = (key) => {
+  if (!key) return "";
+  const [y, m] = key.split("-");
+  return `${TH_MONTHS[Number(m)]} ${Number(y) + 543}`;
+};
+function currentMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 // ── ปุ่ม preset หมายเหตุ HR ──
 // fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
 // fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
@@ -91,6 +104,8 @@ export default function AttendancePage({ role }) {
   const [editMsg, setEditMsg] = useState(null);
   const [reviewQuery, setReviewQuery] = useState("");    // 🔍 ค้นหารายการเวลา (ชื่อ/โน้ต)
   const [collapsedEmp, setCollapsedEmp] = useState({});  // พับกลุ่มตามพนักงาน
+  const [histMonth, setHistMonth]     = useState(currentMonthKey());   // 📅 กรองเดือนคลังไฟล์
+  const [reviewMonth, setReviewMonth] = useState(currentMonthKey());   // 📅 กรองเดือนแก้ไขย้อนหลัง
 
   useEffect(() => { loadEmployees(); loadHistory(); }, []);
 
@@ -103,7 +118,7 @@ export default function AttendancePage({ role }) {
 
   const loadHistory = async () => {
     setLoadingImports(true);
-    try { setImports(await loadRecentImports(10)); }
+    try { setImports(await loadRecentImports(300)); }
     catch (e) { console.error(e); }
     finally { setLoadingImports(false); }
   };
@@ -336,6 +351,7 @@ export default function AttendancePage({ role }) {
   const reviewGroups = (() => {
     const map = {};
     for (const log of reviewLogs) {
+      if (reviewMonth !== "all" && monthKeyOf(log.work_date) !== reviewMonth) continue;
       if (!matchLog(log)) continue;
       const key = log.employee_id || log.employees?.emp_code || "unknown";
       if (!map[key]) map[key] = {
@@ -348,6 +364,12 @@ export default function AttendancePage({ role }) {
     return Object.entries(map).sort((a, b) =>
       String(a[1].name).localeCompare(String(b[1].name), "th"));
   })();
+
+  // 📅 คลังไฟล์: รายชื่อเดือนที่มี + รายการที่กรองแล้ว
+  const histMonths = Array.from(new Set([currentMonthKey(), ...imports.map(i => monthKeyOf(i.date_from)).filter(Boolean)])).sort().reverse();
+  const filteredImports = histMonth === "all" ? imports : imports.filter(i => monthKeyOf(i.date_from) === histMonth);
+  // 📅 แก้ไขย้อนหลัง: รายชื่อเดือนที่มี
+  const reviewMonths = Array.from(new Set([currentMonthKey(), ...reviewLogs.map(l => monthKeyOf(l.work_date)).filter(Boolean)])).sort().reverse();
 
   return (
     <div style={s.page}>
@@ -442,6 +464,20 @@ export default function AttendancePage({ role }) {
             <button onClick={loadReviewLogs} style={s.refreshBtn}>🔄 โหลดใหม่</button>
           </div>
 
+          {/* 📅 เลือกเดือน (default = เดือนปัจจุบัน) */}
+          <div style={s.monthBar}>
+            <span style={s.monthBarLabel}>📅 เดือน</span>
+            <select value={reviewMonth} onChange={e => setReviewMonth(e.target.value)} style={s.monthSelect}>
+              {reviewMonths.map(mk => (
+                <option key={mk} value={mk}>{monthLabelBE(mk)}{mk === currentMonthKey() ? " (เดือนนี้)" : ""}</option>
+              ))}
+              <option value="all">— แสดงทั้งหมด —</option>
+            </select>
+            {reviewMonth !== "all" && reviewMonth !== currentMonthKey() && (
+              <button onClick={() => setReviewMonth(currentMonthKey())} style={s.monthTodayBtn}>กลับเดือนนี้</button>
+            )}
+          </div>
+
           {/* 🔍 ช่องค้นหา */}
           <input type="text" value={reviewQuery}
             onChange={e => setReviewQuery(e.target.value)}
@@ -451,7 +487,7 @@ export default function AttendancePage({ role }) {
           {loadingReview && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
           {!loadingReview && reviewGroups.length === 0 && (
             <p style={{ color:"#9ca3af", textAlign:"center", padding:32 }}>
-              {reviewQ ? "ไม่พบรายการที่ค้นหา" : "🎉 ยังไม่มีรายการเวลา"}
+              {reviewQ ? "ไม่พบรายการที่ค้นหา" : (reviewMonth === "all" ? "🎉 ยังไม่มีรายการเวลา" : `ไม่มีรายการเวลาในเดือน ${monthLabelBE(reviewMonth)}`)}
             </p>
           )}
 
@@ -513,11 +549,27 @@ export default function AttendancePage({ role }) {
             <h3 style={{ margin:0, fontSize:15 }}>📁 ไฟล์ที่บันทึกไปแล้ว</h3>
             <button onClick={loadHistory} style={s.refreshBtn}>🔄 โหลดใหม่</button>
           </div>
+
+          {/* 📅 เลือกเดือน (default = เดือนปัจจุบัน) */}
+          <div style={s.monthBar}>
+            <span style={s.monthBarLabel}>📅 เดือน</span>
+            <select value={histMonth} onChange={e => setHistMonth(e.target.value)} style={s.monthSelect}>
+              {histMonths.map(mk => (
+                <option key={mk} value={mk}>{monthLabelBE(mk)}{mk === currentMonthKey() ? " (เดือนนี้)" : ""}</option>
+              ))}
+              <option value="all">— แสดงทั้งหมด —</option>
+            </select>
+            {histMonth !== "all" && histMonth !== currentMonthKey() && (
+              <button onClick={() => setHistMonth(currentMonthKey())} style={s.monthTodayBtn}>กลับเดือนนี้</button>
+            )}
+          </div>
           {loadingImports && <p style={{ color:"#6b7280" }}>กำลังโหลด...</p>}
-          {!loadingImports && imports.length === 0 && (
-            <p style={{ color:"#9ca3af", textAlign:"center", marginTop:32 }}>ยังไม่มีไฟล์ที่บันทึก</p>
+          {!loadingImports && filteredImports.length === 0 && (
+            <p style={{ color:"#9ca3af", textAlign:"center", marginTop:32 }}>
+              {histMonth === "all" ? "ยังไม่มีไฟล์ที่บันทึก" : `ไม่มีไฟล์ในเดือน ${monthLabelBE(histMonth)}`}
+            </p>
           )}
-          {imports.map(imp => (
+          {filteredImports.map(imp => (
             <div key={imp.id} style={s.importCard}>
               <div style={{ flex:1 }}>
                 <p style={{ margin:0, fontWeight:700, fontSize:14 }}>{imp.file_name}</p>
@@ -754,6 +806,10 @@ const s = {
     color:"#166534", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
   importCard: { display:"flex", alignItems:"flex-start", gap:12,
     padding:"12px 14px", borderRadius:10, border:"1px solid #e2e8f0", marginBottom:8 },
+  monthBar:      { display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:"#f8fafc", padding:"8px 12px", borderRadius:10, border:"1px solid #e2e8f0", marginBottom:12 },
+  monthBarLabel: { fontSize:14, fontWeight:700, color:"#1e3a5f" },
+  monthSelect:   { padding:"7px 12px", border:"1.5px solid #cbd5e1", borderRadius:8, fontSize:14, fontWeight:600, color:"#1e3a5f", background:"#fff", cursor:"pointer" },
+  monthTodayBtn: { padding:"6px 12px", borderRadius:8, border:"1px solid #bfdbfe", background:"#eff6ff", color:"#1d4ed8", cursor:"pointer", fontWeight:600, fontSize:13 },
   deleteBtn: { background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626",
     borderRadius:8, padding:"6px 10px", cursor:"pointer", fontSize:16, flexShrink:0 },
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.45)",
