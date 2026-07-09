@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
+import { ensureSession } from "./supabase";
 
 const MAX_ATTEMPTS = 5;
 const COOLDOWN_SEC = 30;
@@ -55,6 +56,15 @@ export default function LoginPage({ onLogin }) {
         return;
       }
       if (data === "owner" || data === "hr") {
+        // แลก PIN เป็น session จริงก่อน ไม่งั้น RLS จะปฏิเสธทุก query (anon)
+        setLoading(true);
+        const ok = await ensureSession(candidate);
+        setLoading(false);
+        if (!ok) {
+          setPin("");
+          setError("เข้าสู่ระบบไม่สำเร็จ ลองใหม่");
+          return;
+        }
         handleSubmit(candidate, data);
       } else if (markWrongIfNoMatch || candidate.length >= MAX_PIN_LEN) {
         handleWrongPin();
