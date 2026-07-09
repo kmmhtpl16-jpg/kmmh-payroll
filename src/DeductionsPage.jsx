@@ -236,10 +236,10 @@ export default function DeductionsPage({ role }) {
 
   const paidRows = deductions.filter(d => d.is_paid && matchRow(d, d.employees) && inMonth(d));
 
-  // ⚠️ เตือน: มีรายการค้างหักของเดือนอื่นที่ไม่ได้แสดง
-  const unpaidOtherMonths = monthFilter === "all"
-    ? 0
-    : deductions.filter(d => !d.is_paid && monthKey(d.deduct_date) !== monthFilter).length;
+  // หมายเหตุ: เคยมีแบนเนอร์ "ค้างหัก N รายการในเดือนอื่น" ตรงนี้ — เอาออกแล้ว
+  // เพราะ deductions.is_paid ไม่เคยถูกเซ็ตเป็น true ที่ไหนในแอป (insert เป็น false เสมอ)
+  // และ payrollCalc คิดยอดหักจาก deduct_date ที่อยู่ในรอบ ไม่ได้ดู is_paid
+  // → แบนเนอร์จึงนับรายการที่ "หักไปแล้วจริง" มาเตือน และตัวเลขจะบวมขึ้นทุกเดือน
 
   return (
     <div style={s.page}>
@@ -403,12 +403,6 @@ export default function DeductionsPage({ role }) {
           <button onClick={() => setMonthFilter(currentMonthKey())} style={s.monthTodayBtn}>กลับเดือนนี้</button>
         )}
       </div>
-
-      {unpaidOtherMonths > 0 && (
-        <div style={s.otherMonthWarn}>
-          ⚠️ ยังมีรายการ <b>ค้างหัก {unpaidOtherMonths} รายการ</b> ในเดือนอื่นที่ยังไม่ถูกหัก — เลือก <b>"แสดงทั้งหมด"</b> เพื่อดูให้ครบ
-        </div>
-      )}
 
       {/* ── 🔍 ช่องค้นหา (กรองทั้งรายการค้างหัก + ประวัติ) ── */}
       <input type="text" value={query}
