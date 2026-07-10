@@ -223,9 +223,11 @@ export default function AttendancePage({ role }) {
       setEditMsg({ type: "error", text: "❌ " + error.message });
     } else {
       // 🆕 #1.2 ลาป่วย/ลากิจ (เต็ม/ครึ่ง) → บันทึกลงหน้า "การลา" + ตัดสิทธิ์
+      let leaveSyncErr = null;
       if (leavePreset && isDone) {
         try {
-          const cy = new Date().getFullYear();
+          // ⚠️ ใช้ปีของ "วันที่ทำงาน" ไม่ใช่ปีปัจจุบัน (ถ้าย้อนแก้ข้ามปีจะเข้าโควตาผิดปี)
+          const cy = Number(String(editRow.work_date).slice(0, 4)) || new Date().getFullYear();
           const deductDays = leavePreset.half ? 0.5 : 1.0;
           const usedField = leavePreset.leaveType === "sick" ? "sick_used" : "personal_used";
           const quotaField = leavePreset.leaveType === "sick" ? "sick_quota" : "personal_quota";
@@ -236,7 +238,7 @@ export default function AttendancePage({ role }) {
             const { data: bal } = await supabase.from("leave_balances")
               .select("*").eq("employee_id", editRow.employee_id).eq("year", cy).maybeSingle();
             const remain = bal ? (Number(bal[quotaField]) - Number(bal[usedField])) : (leavePreset.leaveType === "sick" ? 30 : 3);
-            await supabase.from("leave_requests").insert({
+            const { error: leaveErr } = await supabase.from("leave_requests").insert({
               employee_id: editRow.employee_id,
               leave_type: leavePreset.leaveType,
               leave_date: editRow.work_date,
@@ -246,6 +248,8 @@ export default function AttendancePage({ role }) {
               deduct_amount: 0,
               note: (editValues.hr_note || "") + " (จากบันทึกเวลา)",
             });
+            // ❗ ห้ามกลืน error เงียบ — เคส 7 ก.ค.69 RLS บล็อกแล้วไม่มีใครรู้ ต้องมาคีย์ซ้ำ
+            if (leaveErr) throw new Error(leaveErr.message);
             if (bal) {
               await supabase.from("leave_balances")
                 .update({ [usedField]: (Number(bal[usedField]) || 0) + deductDays })
@@ -253,12 +257,21 @@ export default function AttendancePage({ role }) {
             } else {
               await supabase.from("leave_balances").insert({
                 employee_id: editRow.employee_id, year: cy, start_date: `${cy}-01-01`,
-                sick_quota: 20, sick_used: leavePreset.leaveType === "sick" ? deductDays : 0,
+                sick_quota: 30, sick_used: leavePreset.leaveType === "sick" ? deductDays : 0,
                 personal_quota: 3, personal_used: leavePreset.leaveType === "personal" ? deductDays : 0,
               });
             }
           }
-        } catch (e) { console.error("leave sync", e); }
+        } catch (e) {
+          console.error("leave sync", e);
+          leaveSyncErr = e.message || String(e);
+        }
+      }
+      // ❗ ห้ามกลืน error เงียบ — เคส 7 ก.ค.69 RLS บล็อกแล้วไม่มีใครรู้ ต้องมาคีย์ซ้ำ
+      if (leaveSyncErr) {
+        setEditMsg({ type: "error", text: '⚠️ บันทึกเวลาแล้ว แต่ลงหน้า "การลา" ไม่สำเร็จ: ' + leaveSyncErr + " — กรุณาไปคีย์ที่หน้าการลาเอง" });
+        setSavingEdit(false);
+        return;
       }
       const doneText = isFullDayAbsence
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
