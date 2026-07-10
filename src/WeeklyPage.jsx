@@ -126,7 +126,7 @@ export default function WeeklyPage({ role }) {
     setLoading(true); setMsg(null);
     try {
       const { data: per } = await supabase
-        .from("pay_periods").select("id, year, month")
+        .from("pay_periods").select("id, year, month, is_closed")
         .eq("year", year).eq("month", month).single();
       if (!per) { setMsg({ type:"warn", text:"⚠️ ยังไม่มีงวดเดือนนี้" }); setLoading(false); return; }
       setPeriod(per);
@@ -337,6 +337,8 @@ export default function WeeklyPage({ role }) {
   }
 
   async function submitVoucher(cycle, rows, isMonthEnd) {
+    // 🔒 งวดปิดแล้ว = ห้ามสร้าง/สร้างใบเบิกใหม่ (ทับ to_pay ที่ปรับมือไว้)
+    if (period?.is_closed) { setMsg({ type:"error", text:"🔒 งวดนี้ปิดแล้ว — สร้าง/สร้างใบเบิกใหม่ไม่ได้ (เปิดงวดที่หน้า 💰 เงินเดือน ก่อน)" }); return; }
     const cycleKey = getCycleKey(cycle);
     const existing = vouchers[cycleKey];
     if (existing && existing.status !== "returned") { setMsg({ type:"warn", text:"⚠️ รอบนี้มีใบเบิกแล้ว" }); return; }
@@ -659,6 +661,16 @@ export default function WeeklyPage({ role }) {
         <button onClick={loadAll} style={s.refreshBtn}>🔄 โหลดใหม่</button>
       </div>
 
+      {/* 🔒 งวดปิดแล้ว — ห้ามสร้าง/สร้างใบเบิกใหม่ */}
+      {period?.is_closed && (
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap",
+          padding:"10px 14px", borderRadius:8, border:"1px solid #fca5a5",
+          background:"#fef2f2", color:"#991b1b", marginBottom:12, fontSize:14 }}>
+          <span style={{ fontWeight:800 }}>🔒 งวดนี้ปิดแล้ว</span>
+          <span style={{ fontSize:13 }}>ยื่น/สร้างใบเบิกใหม่ไม่ได้ — ถ้าต้องแก้จริง ให้เปิดงวดที่หน้า 💰 เงินเดือน ก่อน</span>
+        </div>
+      )}
+
       {/* การ์ดสรุป "เบิกได้อีกเท่าไหร่" — อ่านอย่างเดียว, โหลดข้อมูลเอง ไม่ผูกกับการคำนวณเงินเดือน */}
       <AdvanceSummaryCard />
 
@@ -766,7 +778,7 @@ export default function WeeklyPage({ role }) {
             }
 
             {voucher && <VoucherInfo voucher={voucher} />}
-            <VoucherActions role={role} cycleKey={cycleKey} voucher={voucher} rows={rows}
+            <VoucherActions role={role} cycleKey={cycleKey} voucher={voucher} rows={rows} locked={period?.is_closed}
               totalPay={totalPay} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher(cycle, rows, false)}
               onApprove={() => approveVoucher(cycleKey)}
@@ -852,7 +864,7 @@ export default function WeeklyPage({ role }) {
             </div>
 
             </div>{!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
-            {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows}
+            {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows} locked={period?.is_closed}
               totalPay={monthEndTotal} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
               onApprove={() => approveVoucher("month_end")}
@@ -997,13 +1009,16 @@ function VoucherInfo({ voucher }) {
   );
 }
 
-function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, approving, onSubmit, onApprove, onReturn, onPrint, purple }) {
+function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, approving, onSubmit, onApprove, onReturn, onPrint, purple, locked }) {
   const status   = voucher?.status;
   const btnColor = purple ? "#7c3aed" : "#1e3a5f";
   return (
     <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:10,
       padding:"12px 16px", borderTop:"1px solid #f1f5f9" }}>
-      {role === "hr" && (!voucher || status === "returned") && rows.length > 0 && (
+      {locked && (
+        <span style={{ fontSize:12, color:"#991b1b", fontWeight:700 }}>🔒 งวดปิดแล้ว — แก้ไขใบเบิกไม่ได้</span>
+      )}
+      {!locked && role === "hr" && (!voucher || status === "returned") && rows.length > 0 && (
         <button onClick={onSubmit} disabled={submitting===cycleKey}
           style={{ ...s.markBtn, background:btnColor, opacity:submitting===cycleKey?0.6:1 }}>
           {submitting===cycleKey ? "⏳..." : "📤 ยื่นเบิกเงิน"}
@@ -1015,7 +1030,7 @@ function VoucherActions({ role, cycleKey, voucher, rows, totalPay, submitting, a
             style={{ ...s.markBtn, background:"#16a34a", opacity:approving===cycleKey?0.6:1 }}>
             {approving===cycleKey ? "⏳..." : "✅ อนุมัติ"}
           </button>
-          <button onClick={onReturn} style={{ ...s.markBtn, background:"#dc2626" }}>↩️ ตีกลับ</button>
+          {!locked && <button onClick={onReturn} style={{ ...s.markBtn, background:"#dc2626" }}>↩️ ตีกลับ</button>}
         </>
       )}
       {status === "approved" && (

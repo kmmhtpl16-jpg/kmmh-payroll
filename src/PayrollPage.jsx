@@ -6,7 +6,8 @@
 //        อัตโนมัติ (ตั้งต้นจ่ายสิ้นเดือน) — ยอดสุทธิหน้านี้ยังรวม OT ตามเดิม
 // 🔧 v5: ตารางเต็มความกว้างจอ + ตรึงคอลัมน์ "ชื่อ" ให้ติดซ้ายตลอดเวลาเลื่อน
 // 🔧 v6: ป็อปอัปรายคนโชว์บรรทัด "คืนค่าประกันงาน" + "คืนค่าสมัครงาน" (เฉพาะตอนลาออก > 0)
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "./supabaseClient";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
 import { exportPayrollExcel } from "./payrollExport";
 
@@ -27,6 +28,42 @@ export default function PayrollPage({ role }) {
   const [msg,       setMsg]       = useState(null);
   const [detail,    setDetail]    = useState(null);
 
+  // 🔒 สถานะงวด (ปิดแล้ว = ห้ามบันทึกทับ)
+  const [periodInfo, setPeriodInfo] = useState(null);   // { id, is_closed } | "none" | null(กำลังโหลด)
+  const [unlocking,  setUnlocking]  = useState(false);
+
+  const loadPeriod = useCallback(async () => {
+    setPeriodInfo(null);
+    const { data } = await supabase
+      .from("pay_periods").select("id, is_closed")
+      .eq("year", year - 543).eq("month", month).maybeSingle();
+    setPeriodInfo(data || "none");
+  }, [year, month]);
+
+  useEffect(() => { loadPeriod(); }, [loadPeriod]);
+
+  const isClosed = periodInfo && periodInfo !== "none" && periodInfo.is_closed === true;
+
+  // เปิด/ปิดงวด — เจ้าของเท่านั้น (ทางปลดล็อกที่ชัดเจน ไม่ใช่ปุ่มลับ)
+  const togglePeriodLock = async () => {
+    if (!periodInfo || periodInfo === "none") return;
+    const next = !periodInfo.is_closed;
+    const warn = next
+      ? `ปิดงวด ${MONTHS_TH[month]} ${year}?\nหลังปิดจะบันทึกทับไม่ได้จนกว่าจะเปิดใหม่`
+      : `เปิดงวด ${MONTHS_TH[month]} ${year} ให้แก้ไขได้?\n\n⚠️ ระวัง: การกด "บันทึกลง DB" หลังเปิดงวด จะทับยอดสุทธิที่ปรับมือไว้ทั้งหมด`;
+    if (!confirm(warn)) return;
+    setUnlocking(true);
+    try {
+      const { error } = await supabase
+        .from("pay_periods").update({ is_closed: next }).eq("id", periodInfo.id);
+      if (error) throw error;
+      setMsg({ type: next ? "ok" : "warn", text: next ? "🔒 ปิดงวดแล้ว" : "🔓 เปิดงวดแล้ว — ระวังการบันทึกทับ" });
+      await loadPeriod();
+    } catch (e) {
+      setMsg({ type:"error", text:"❌ " + e.message });
+    } finally { setUnlocking(false); }
+  };
+
   const handleCalc = async () => {
     setLoading(true); setMsg(null); setResult(null);
     try {
@@ -42,6 +79,10 @@ export default function PayrollPage({ role }) {
 
   const handleSave = async () => {
     if (!result) return;
+    if (isClosed) {
+      setMsg({ type:"error", text:"🔒 งวดนี้ปิดแล้ว — บันทึกทับไม่ได้ (เปิดงวดก่อน)" });
+      return;
+    }
     setSaving(true);
     try {
       const res = await savePayrollResults(year - 543, month, result.results);
@@ -87,6 +128,31 @@ export default function PayrollPage({ role }) {
         </button>
       </div>
 
+      {/* ── 🔒 ป้ายสถานะงวด ── */}
+      {isClosed && (
+        <div style={s.lockBar}>
+          <span style={{ fontWeight:800 }}>🔒 งวด {MONTHS_TH[month]} {year} ปิดแล้ว</span>
+          <span style={{ flex:1, fontSize:13 }}>
+            บันทึกทับไม่ได้ — ยอดสุทธิบางคนถูกปรับมือไว้ ถ้าบันทึกใหม่จะถูกทับทันที
+          </span>
+          {role === "owner" && (
+            <button onClick={togglePeriodLock} disabled={unlocking}
+              style={{ ...s.btn, background:"#b91c1c", color:"#fff", padding:"6px 12px", fontSize:13 }}>
+              {unlocking ? "⏳..." : "🔓 เปิดงวด (เจ้าของ)"}
+            </button>
+          )}
+        </div>
+      )}
+      {periodInfo && periodInfo !== "none" && !isClosed && role === "owner" && (
+        <div style={{ ...s.lockBar, background:"#f8fafc", borderColor:"#cbd5e1", color:"#475569" }}>
+          <span style={{ flex:1, fontSize:13 }}>งวด {MONTHS_TH[month]} {year} · เปิดอยู่ (แก้ไขได้)</span>
+          <button onClick={togglePeriodLock} disabled={unlocking}
+            style={{ ...s.btn, background:"#334155", color:"#fff", padding:"6px 12px", fontSize:13 }}>
+            {unlocking ? "⏳..." : "🔒 ปิดงวด"}
+          </button>
+        </div>
+      )}
+
       {/* ── status ── */}
       {msg && (
         <div style={{ ...s.msgBox,
@@ -115,8 +181,11 @@ export default function PayrollPage({ role }) {
           </div>
 
           <div style={s.actionRow}>
-            <button onClick={handleSave} disabled={saving} style={{ ...s.btn, ...s.btnSuccess }}>
-              {saving ? "⏳ กำลังบันทึก..." : "💾 บันทึกลง DB"}
+            <button onClick={handleSave} disabled={saving || isClosed}
+              title={isClosed ? "งวดนี้ปิดแล้ว — เปิดงวดก่อนจึงบันทึกได้" : ""}
+              style={{ ...s.btn, ...s.btnSuccess,
+                ...(isClosed ? { background:"#cbd5e1", color:"#64748b", cursor:"not-allowed" } : {}) }}>
+              {isClosed ? "🔒 งวดปิดแล้ว" : saving ? "⏳ กำลังบันทึก..." : "💾 บันทึกลง DB"}
             </button>
             <button onClick={handleExport} disabled={exporting} style={{ ...s.btn, ...s.btnExcel }}>
               {exporting ? "⏳ กำลัง export..." : "📊 ออก Excel"}
@@ -319,6 +388,9 @@ const s = {
   btnSuccess: { background:"#16a34a", color:"#fff" },
   btnExcel:   { background:"#0f766e", color:"#fff" },
   msgBox: { padding:"10px 14px", borderRadius:8, border:"1px solid", marginBottom:12, fontWeight:600, fontSize:14 },
+  lockBar: { display:"flex", alignItems:"center", gap:10, flexWrap:"wrap",
+    padding:"10px 14px", borderRadius:8, border:"1px solid #fca5a5",
+    background:"#fef2f2", color:"#991b1b", marginBottom:12, fontSize:14 },
   cardRow:   { display:"flex", gap:10, marginBottom:12, flexWrap:"wrap" },
   card:      { flex:1, minWidth:140, background:"#fff", borderRadius:10, padding:"10px 14px",
     border:"2px solid", boxShadow:"0 1px 4px rgba(0,0,0,0.06)" },

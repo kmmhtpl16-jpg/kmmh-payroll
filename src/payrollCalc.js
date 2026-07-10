@@ -465,12 +465,19 @@ export async function calcPayroll(year, month) {
 export async function savePayrollResults(year, month, results) {
   const { data: period, error: pErr } = await supabase
     .from("pay_periods")
-    .select("id")
+    .select("id, is_closed")
     .eq("year", year)
     .eq("month", month)
     .single();
 
   if (pErr || !period) throw new Error("ไม่พบ pay_period สำหรับเดือนนี้ — กรุณาสร้างก่อน");
+
+  // 🔒 ตัวกันพลาด: งวดที่ปิดแล้วห้ามเขียนทับ (ยอดสุทธิอาจถูกปรับมือไว้)
+  //    ถ้าต้องแก้จริง → เปิดงวดก่อน (ปุ่ม "เปิดงวด" หน้าเงินเดือน, เจ้าของเท่านั้น)
+  //    ชั้นนี้กันพลาดจาก UI; ชั้นฐานข้อมูลมี trigger guard_closed_payroll_records กันซ้ำอีกชั้น
+  if (period.is_closed) {
+    throw new Error("งวดนี้ปิดแล้ว — บันทึกทับไม่ได้ (ถ้าต้องแก้จริง ให้เปิดงวดก่อน)");
+  }
 
   const records = results.map(r => ({
     period_id:          period.id,
