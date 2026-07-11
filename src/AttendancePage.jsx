@@ -36,6 +36,8 @@ const HR_NOTE_PRESETS = [
   // 🟠 อื่นๆ
   { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false, cat: "other" },
   { label: "ติดส่งสินค้า", value: "ติดส่งสินค้า", fullDay: false, deliveryDuty: true, cat: "other" },
+  // 🔵 มาเช้า-กลับเช้า/เลื่อนกะทั้งวัน ทำครบวัน แต่ไม่อนุมัติ OT → คงเวลาสแกน บังคับ สาย=0 OT=0
+  { label: "ทำงาน 1 วัน ไม่เอา OT/สาย", value: "ทำงาน 1 วัน (ไม่เอา OT/สาย)", fullDay: false, noOt: true, cat: "other" },
 ];
 
 // กลุ่มปุ่ม (เรียงเป็นแถว/คอลัมน์ให้อ่านง่าย — สีเดียวกัน = ผลต่อเงินเหมือนกัน)
@@ -191,12 +193,14 @@ export default function AttendancePage({ role }) {
     // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
     //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
     const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
+    // 🔵 ทำงาน 1 วัน ไม่เอา OT/สาย → HR อนุมัติว่าเป็นวันทำงานปกติ (คงเวลาสแกน แต่ล้าง สาย/OT เป็น 0)
+    const isNormalNoOt = !!HR_NOTE_PRESETS.find(p => p.noOt && p.value === editValues.hr_note);
     const amFilled = am_in !== "" && am_out !== "";
     const pmFilled = pm_in !== "" && pm_out !== "";
 
     const allFilled = amFilled && pmFilled;
     // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
-    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty;
+    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt;
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -206,8 +210,8 @@ export default function AttendancePage({ role }) {
         scan_am_out: clearTimes ? null : (am_out || null),
         scan_pm_in: clearTimes ? null : (pm_in || null),
         scan_pm_out: clearTimes ? null : (pm_out || null),
-        late_minutes: clearTimes ? 0 : lateMin,
-        ot_hours: clearTimes ? 0 : otHours,
+        late_minutes: clearTimes ? 0 : (isNormalNoOt ? 0 : lateMin),
+        ot_hours: clearTimes ? 0 : (isNormalNoOt ? 0 : otHours),
         hr_note: editValues.hr_note || null,
         hr_extra_deduct: parseFloat(editValues.hr_extra_deduct) || 0,
         hr_extra_note: editValues.hr_extra_note || null,
