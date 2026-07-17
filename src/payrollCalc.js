@@ -1,7 +1,18 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.8
+// คำนวณเงินเดือน KMMH — v7.9
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.9 เปลี่ยนจาก v7.8:
+//   • [ออกระหว่างวัน] เดิมจ่ายเต็มวัน − เงินที่กรอกหักเพิ่มเอง
+//     เปลี่ยนเป็น: จ่ายตามชั่วโมงที่ทำจริง = (เวลาออก − 08:00 − พักเที่ยง) ÷ 8 × ค่าแรงวัน
+//     - นับจาก 08:00 เสมอ (มาเช้าไม่ได้เพิ่ม, มาสายไม่ลดตรงนี้)
+//     - พักเที่ยง = เวลา "พักออก" จริง + 1 ชม. (ร้านแบ่งกะพัก เวลาไม่ตายตัว) หักเฉพาะที่คร่อม
+//       ถ้าออกก่อนพัก/ยังไม่ได้พัก → ไม่หักพัก
+//     - ยังหักสายแยกตามสแกนเข้าจริง (มาสาย = โดนหักสายเหมือนวันปกติ)
+//     - ตัดเบี้ยขยันวันนั้น (has_leave=true)
+//     - อ่านเวลาออกจากช่องออกเย็น (scan_pm_out) ถ้าว่างใช้พักออก (scan_am_out)
+//     - ช่อง "หักเพิ่ม" (hr_extra_deduct) ยังใช้ได้ปกติสำหรับหักเพิ่มพิเศษ (default 0)
 //
 // 🔧 v7.8 เปลี่ยนจาก v7.7:
 //   • [ลาป่วย/ลากิจครึ่งวัน] จ่ายเต็ม 1 วัน (ทำงานครึ่งวัน + ใช้สิทธิ์ลาครึ่งวันที่ได้จ่าย)
@@ -110,6 +121,39 @@ function countSundays(year, month, fromDay = 1, toDay = null) {
     if (new Date(year, month - 1, d).getDay() === 0) count++;
   }
   return count;
+}
+
+// 🆕 v7.9 — เวลาทำงานมาตรฐาน (นาทีจากเที่ยงคืน) สำหรับคิด "ออกระหว่างวัน" ตามชั่วโมง
+const MID_WORK_START = 8 * 60;   // 08:00 เข้างาน
+const MID_LUNCH_LEN  = 60;       // พักเที่ยง 1 ชม. — เริ่มนับจากเวลา "พักออก" จริงของแต่ละคน
+                                 //   (ร้านแบ่งกะพักเที่ยงเพื่อเฝ้าหน้าร้าน เวลาพักจึงไม่ตายตัว)
+const MID_FULL_MIN   = 8 * 60;   // 8 ชม. = วันเต็ม
+
+// แปลง "HH:MM" หรือ "HH:MM:SS" → นาทีจากเที่ยงคืน (null ถ้าอ่านไม่ได้)
+function hhmmToMin(t) {
+  if (!t) return null;
+  const m = String(t).match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+// 🆕 v7.9 — สัดส่วนวันทำงานของ "ออกระหว่างวัน" = ชั่วโมงที่ทำจริง ÷ 8
+//   • นับจาก 08:00 เสมอ (มาเช้าไม่ได้เพิ่ม, มาสายไม่ลดตรงนี้ — หักสายแยกต่างหาก)
+//   • พักเที่ยง = ช่วง [เวลาพักออก, เวลาพักออก + 1 ชม.] หักเฉพาะส่วนที่คร่อมช่วงทำงาน
+//     - ถ้ายังไม่ได้พัก (ไม่มีเวลาพักออก / ออกก่อนพัก) → ไม่หักพัก
+//   • คืนค่า 0–1 (0 = ออกก่อน/พอดี 08:00, 1 = ทำครบ 8 ชม.ขึ้นไป)
+function midLeaveFactor(leaveStr, amOutStr) {
+  const leaveMin = hhmmToMin(leaveStr);
+  if (leaveMin == null || leaveMin <= MID_WORK_START) return 0;
+  let lunch = 0;
+  const amOut = hhmmToMin(amOutStr);
+  if (amOut != null && amOut > MID_WORK_START) {
+    const lunchEnd = amOut + MID_LUNCH_LEN;
+    // overlap ของช่วงทำงาน [08:00, เวลาออก] กับ ช่วงพัก [พักออก, พักออก+60]
+    lunch = Math.max(0, Math.min(leaveMin, lunchEnd) - Math.max(MID_WORK_START, amOut));
+  }
+  const workedMin = Math.max(0, leaveMin - MID_WORK_START - lunch);
+  return Math.min(1, workedMin / MID_FULL_MIN);
 }
 
 // หักสายรายวัน (logic v2)
@@ -301,7 +345,14 @@ export async function calcPayroll(year, month) {
       // ครึ่งวันที่ "หักค่าแรง" = ขาดงานครึ่งวันเท่านั้น → นับ 0.5 วัน จ่ายครึ่ง
       //   ⚠️ ลาป่วย/ลากิจครึ่งวัน = จ่ายเต็ม 1 วัน (ทำงานครึ่ง+สิทธิ์ลาครึ่ง) ไม่เข้าเงื่อนไขนี้
       const isHalfDay = isHalfAbsent;
-      const dayFactor = isHalfDay ? 0.5 : 1;
+      // 🆕 v7.9 ออกระหว่างวัน → จ่ายตามชั่วโมงที่ทำจริง (08:00 → เวลาออก, หักพักเที่ยง)
+      //   ใช้เวลาออกจากช่องออกเย็น (scan_pm_out) ก่อน ถ้าว่างใช้พักออก (scan_am_out)
+      //   ยังหักสายแยกตามสแกนเข้าจริง + ตัดเบี้ยขยัน (นับเป็น has_leave ด้านล่าง)
+      const isMidLeave = log.hr_note && /ออกระหว่างวัน/.test(log.hr_note);
+      let dayFactor;
+      if (isHalfDay)        dayFactor = 0.5;
+      else if (isMidLeave)  dayFactor = midLeaveFactor(log.scan_pm_out || log.scan_am_out, log.scan_am_out);
+      else                  dayFactor = 1;
 
       work_days += dayFactor;
 
@@ -319,6 +370,7 @@ export async function calcPayroll(year, month) {
 
       if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) leave_days += 0.5; // นับเฉพาะ "ลา" จริง (ไม่นับขาดงานครึ่งวัน)
       if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
+      if (isMidLeave) has_leave = true; // 🆕 v7.9 ออกระหว่างวัน → ตัดเบี้ยขยันด้วย
     }
 
     const base_wage   = parseFloat((trial_base + perm_base).toFixed(2));
