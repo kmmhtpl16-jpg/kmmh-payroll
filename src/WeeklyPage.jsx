@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
-import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { calcLateDeduction } from "./payrollCalc";
+import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { calcLateDeduction, midLeaveFactor } from "./payrollCalc";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."]; const DOW_TH = ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."];
 
@@ -86,14 +86,25 @@ function buildCyclesFromCalendar(year, month, logDates) {
   return cycles;
 }
 
+// 🆕 v7.10 น้ำหนักวันทำงานต่อ 1 log ให้ตรงกับ payrollCalc (กันรอบเสาร์คิดวันเต็มแล้วหักสายซ้ำ)
+//   ขาดงานครึ่งวัน=0.5 · ขาดงานเต็มวัน=0 · ออกระหว่างวัน=ตามชั่วโมงจริง (midLeaveFactor) · อื่นๆ=1
+function cycleDayWeight(l) {
+  const note = l.hr_note || "";
+  if (/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(note)) return 0.5;
+  if (/ขาด/.test(note)) return 0;
+  if (/ออกระหว่างวัน/.test(note)) return midLeaveFactor(l.scan_pm_out || l.scan_am_out, l.scan_am_out);
+  return 1;
+}
+
 function calcCycleWageForEmployee(record, logsInCycle, WTAG) {
-  const workDays = logsInCycle.filter(
+  const nonSun = logsInCycle.filter(
     l => new Date(l.work_date + "T00:00:00").getDay() !== 0
-  ).length;
+  );
+  const workDays = nonSun.reduce((s, l) => s + cycleDayWeight(l), 0);
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
   const dailyRate = record.base_wage / record.work_days;
-  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; logsInCycle.filter(l => new Date(l.work_date + "T00:00:00").getDay() !== 0).forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = Math.round(dailyRate * workDays - _lateDed);
-  return { workDays, wage };
+  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; nonSun.forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = Math.round(dailyRate * workDays - _lateDed);
+  return { workDays: Math.round(workDays * 100) / 100, wage };
 }
 
 export default function WeeklyPage({ role }) {

@@ -1,7 +1,11 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.9
+// คำนวณเงินเดือน KMMH — v7.10
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.10 เปลี่ยนจาก v7.9:
+//   • export midLeaveFactor เป็น single source ให้ WeeklyPage คิดรอบเสาร์ตามชั่วโมงตรงกัน
+//   • คู่กับ AttendancePage: "ออกระหว่างวัน" ไม่คิด "ออกก่อน 17:00" เป็นสายอีก (กันหักซ้ำ)
 //
 // 🔧 v7.9 เปลี่ยนจาก v7.8:
 //   • [ออกระหว่างวัน] เดิมจ่ายเต็มวัน − เงินที่กรอกหักเพิ่มเอง
@@ -142,7 +146,7 @@ function hhmmToMin(t) {
 //   • พักเที่ยง = ช่วง [เวลาพักออก, เวลาพักออก + 1 ชม.] หักเฉพาะส่วนที่คร่อมช่วงทำงาน
 //     - ถ้ายังไม่ได้พัก (ไม่มีเวลาพักออก / ออกก่อนพัก) → ไม่หักพัก
 //   • คืนค่า 0–1 (0 = ออกก่อน/พอดี 08:00, 1 = ทำครบ 8 ชม.ขึ้นไป)
-function midLeaveFactor(leaveStr, amOutStr) {
+export function midLeaveFactor(leaveStr, amOutStr) {
   const leaveMin = hhmmToMin(leaveStr);
   if (leaveMin == null || leaveMin <= MID_WORK_START) return 0;
   let lunch = 0;

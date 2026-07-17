@@ -195,6 +195,11 @@ export default function AttendancePage({ role }) {
     const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
     // 🔵 ทำงาน 1 วัน ไม่เอา OT/สาย → HR อนุมัติว่าเป็นวันทำงานปกติ (คงเวลาสแกน แต่ล้าง สาย/OT เป็น 0)
     const isNormalNoOt = !!HR_NOTE_PRESETS.find(p => p.noOt && p.value === editValues.hr_note);
+    // 🆕 v7.10 ออกระหว่างวัน → ไม่คิด "ออกก่อน 17:00" เป็นสาย (payrollCalc คิดค่าแรงตามชั่วโมงให้แล้ว)
+    //   หักเฉพาะ "สายตอนเช้า" จริง (มาหลัง 08:00) เท่านั้น + ล้าง OT
+    const isMidLeave = !!editValues.hr_note && /ออกระหว่างวัน/.test(editValues.hr_note);
+    const _amInMin = (() => { const m = String(am_in || "").match(/(\d{1,2}):(\d{2})/); return m ? (+m[1] * 60 + +m[2]) : null; })();
+    const midLeaveLate = (isMidLeave && _amInMin != null) ? Math.max(0, _amInMin - 480) : 0;
     const amFilled = am_in !== "" && am_out !== "";
     const pmFilled = pm_in !== "" && pm_out !== "";
 
@@ -210,8 +215,8 @@ export default function AttendancePage({ role }) {
         scan_am_out: clearTimes ? null : (am_out || null),
         scan_pm_in: clearTimes ? null : (pm_in || null),
         scan_pm_out: clearTimes ? null : (pm_out || null),
-        late_minutes: clearTimes ? 0 : (isNormalNoOt ? 0 : lateMin),
-        ot_hours: clearTimes ? 0 : (isNormalNoOt ? 0 : otHours),
+        late_minutes: clearTimes ? 0 : (isNormalNoOt ? 0 : (isMidLeave ? midLeaveLate : lateMin)),
+        ot_hours: clearTimes ? 0 : ((isNormalNoOt || isMidLeave) ? 0 : otHours),
         hr_note: editValues.hr_note || null,
         hr_extra_deduct: parseFloat(editValues.hr_extra_deduct) || 0,
         hr_extra_note: editValues.hr_extra_note || null,
