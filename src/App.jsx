@@ -10,6 +10,7 @@ import InsurancePage from "./InsurancePage";
 import PayrollPage from "./PayrollPage";
 import WeeklyPage from "./WeeklyPage";
 import SummaryPage from "./SummaryPage";
+import AnnualSummaryPage from "./AnnualSummaryPage";
 import SettingsPage from "./SettingsPage";
 
 const TABS = [
@@ -22,6 +23,7 @@ const TABS = [
   { id: "payroll",     label: "💰 เงินเดือน" },
   { id: "weekly",      label: "💸 รายจ่ายบริษัท" },
   { id: "summary",     label: "📑 สรุป/ปกส" },
+  { id: "annual",      label: "📊 สรุปรายปี" },
   { id: "settings",    label: "⚙️ วันหยุด" },
 ];
 
@@ -56,6 +58,7 @@ export default function App() {
         {activeTab === "payroll"     && <PayrollPage role={role} />}
         {activeTab === "weekly"      && <WeeklyPage role={role} />}
         {activeTab === "summary"     && <SummaryPage role={role} />}
+        {activeTab === "annual"      && <AnnualSummaryPage role={role} />}
         {activeTab === "settings"    && <SettingsPage role={role} />}
       </main>
     </div>
