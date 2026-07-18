@@ -157,7 +157,7 @@ export default function WeeklyPage({ role }) {
       const dateTo   = `${year}-${monthStr}-${String(dim).padStart(2,"0")}`;
 
       const { data: logs } = await supabase
-        .from("attendance_logs").select("employee_id, work_date, hr_note, late_minutes, hr_extra_deduct")
+        .from("attendance_logs").select("employee_id, work_date, hr_note, late_minutes, hr_extra_deduct, scan_am_in, scan_am_out, scan_pm_in, scan_pm_out")
         .in("employee_id", empIds).gte("work_date", dateFrom).lte("work_date", dateTo);
       setAllLogs(logs || []); const { data: _tags } = await supabase.from("late_tags").select("employee_id,tag_date,rate_per_minute").in("employee_id", empIds).gte("tag_date", dateFrom).lte("tag_date", dateTo); const _tm = {}; (_tags || []).forEach(t => { _tm[t.employee_id + "_" + t.tag_date] = t.rate_per_minute; }); setLateTagMap(_tm);
 
