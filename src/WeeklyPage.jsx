@@ -238,11 +238,16 @@ export default function WeeklyPage({ role }) {
 
   function getLogsInCycle(empId, cycle) {
     const f = toLocalDateStr(cycle.dateFrom), t = toLocalDateStr(cycle.dateTo);
-    return allLogs.filter(l =>
-      l.employee_id === empId && l.work_date >= f && l.work_date <= t &&
-      new Date(l.work_date + "T00:00:00").getDay() !== 0 &&
-      !(l.hr_note && /ขาด|ลาป่วย|ลากิจ|ครึ่งวัน/.test(l.hr_note))   // 🆕 ขาด/ลา/ลาครึ่งวัน → ไม่เข้ารอบเสาร์ (ทุกการลาจ่ายสิ้นเดือน)
-    );
+    return allLogs.filter(l => {
+      if (l.employee_id !== empId || l.work_date < f || l.work_date > t) return false;
+      if (new Date(l.work_date + "T00:00:00").getDay() === 0) return false;
+      const n = l.hr_note || "";
+      // 🆕 v5.4: "ขาดงานครึ่งวัน" = มาทำงานจริงครึ่งวัน → จ่ายครึ่งวันตามรอบรับของพนักงานนั้น
+      //   (cycleDayWeight คืน 0.5) ไม่ยกไปสิ้นเดือน · สิ้นเดือนหักลบยอดเสาร์อัตโนมัติ (net − satTotal)
+      if (/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(n)) return true;
+      // ขาดเต็มวัน / ลาป่วย / ลากิจ / ลาครึ่งวัน → ยกไปคิดรวมสิ้นเดือน
+      return !/ขาด|ลาป่วย|ลากิจ|ครึ่งวัน/.test(n);
+    });
   }
 
   function getAdvancesInCycle(empId, cycle) {
