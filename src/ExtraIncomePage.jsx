@@ -58,6 +58,7 @@ export default function ExtraIncomePage({ role }) {
   const [entries,   setEntries]   = useState([]); // รายการทุกคนในงวด
   const [loading,   setLoading]   = useState(false);
   const [kpiProps,  setKpiProps]  = useState([]); // ยอด KPI นับสต๊อก รอ HR ยืนยัน
+  const [tripProps, setTripProps] = useState([]); // ข้อเสนอค่าเที่ยวจากระบบจัดส่ง (รอตรวจ)
 
   // cache ยอดจากระบบ ราย employee_id → {ot:{hours,amount}|null}
   const [sysCache, setSysCache] = useState({});
@@ -123,6 +124,7 @@ export default function ExtraIncomePage({ role }) {
     if (!periodId) return;
     loadEntries();
     loadKpiProps();
+    loadTripProps();
     (async () => {
       const { data: cyc } = await supabase
         .from("pay_cycles")
@@ -176,6 +178,45 @@ export default function ExtraIncomePage({ role }) {
     }
     flash("ยืนยันทั้งหมดแล้ว ✓");
     loadKpiProps(); loadEntries();
+  }
+
+  // ── โหลดข้อเสนอค่าเที่ยวจากระบบจัดส่ง (สถานะ pending) ของงวดที่เลือก ──
+  async function loadTripProps() {
+    const { data } = await supabase
+      .from("trip_pay_proposals")
+      .select("*")
+      .eq("period_id", periodId)
+      .eq("status", "pending")
+      .order("amount", { ascending: false });
+    setTripProps(data || []);
+  }
+
+  // ใช้ยอดข้อเสนอ → เติมลงฟอร์ม (HR ตรวจแล้วค่อยกดบันทึกเอง ไม่ลงอัตโนมัติ)
+  function useTripProp(p) {
+    const cyc = p.detail?.cycle;
+    setForm((f) => ({
+      ...f,
+      employee_id: p.employee_id,
+      income_type: "other",
+      label: "ค่าเที่ยวจัดส่ง",
+      amount: String(p.amount),
+      note: p.trips + " เที่ยว" + (cyc ? " (" + cyc.start + " ถึง " + cyc.end + ")" : ""),
+      disburse_on: "month_end",
+      _systemAmount: null,
+    }));
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    flash("เติมยอดในฟอร์มแล้ว — ตรวจสอบก่อนกดบันทึก");
+  }
+
+  // ทำเครื่องหมายว่าตรวจแล้ว → ซ่อนแถบเตือนของคนนี้
+  async function reviewTripProp(p) {
+    if (!confirm("ทำเครื่องหมายว่าตรวจแล้ว? แถบเตือนของคนนี้จะหายไป")) return;
+    const { error } = await supabase
+      .from("trip_pay_proposals")
+      .update({ status: "reviewed", updated_at: new Date().toISOString() })
+      .eq("id", p.id);
+    if (error) return flash("อัปเดตไม่สำเร็จ: " + error.message, "err");
+    loadTripProps();
   }
 
   // ── ดึงยอด OT จากระบบเมื่อเลือกคน ──
@@ -423,6 +464,31 @@ export default function ExtraIncomePage({ role }) {
         </div>
       )}
 
+      {/* ── 🚚 ค่าเที่ยวจากระบบจัดส่ง (รอตรวจ) ── */}
+      {tripProps.length > 0 && (
+        <div style={S.tripBox}>
+          <div style={S.tripHead}>🚚 ค่าเที่ยวจากระบบจัดส่ง — ตรวจสอบก่อนกรอกยอดจริง ({tripProps.length})</div>
+          <div style={S.tripSub}>
+            ยอดนี้เป็นแค่ “ข้อเสนอ” จากแอปจัดส่ง ระบบยังไม่ลงเงินให้
+            {tripProps[0]?.detail?.cycle ? " · รอบตัด " + tripProps[0].detail.cycle.start + " ถึง " + tripProps[0].detail.cycle.end : ""}
+          </div>
+          {tripProps.map((p) => (
+            <div key={p.id} style={S.tripRow}>
+              <span style={{ fontWeight: 600 }}>{p.nickname || empMap[p.employee_id]?.nickname || "—"}</span>
+              <span style={S.tripTag}>{p.trips} เที่ยว</span>
+              <span style={S.tripAmt}>{fmt(p.amount)} บาท</span>
+              {canEdit && (
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button style={S.tripUse} onClick={() => useTripProp(p)}>ใช้ยอดนี้</button>
+                  <button style={S.tripOk} onClick={() => reviewTripProp(p)} title="ตรวจแล้ว ซ่อนแถบนี้">✓</button>
+                </span>
+              )}
+            </div>
+          ))}
+          <div style={S.tripFoot}>ℹ️ กด “ใช้ยอดนี้” เพื่อเติมลงฟอร์มด้านบน แล้วตรวจก่อนกดบันทึกรายได้</div>
+        </div>
+      )}
+
       {/* ── 📊 ยอด KPI นับสต๊อก รอ HR ยืนยัน ── */}
       {canEdit && kpiProps.length > 0 && (
         <div style={S.kpiBox}>
@@ -557,4 +623,14 @@ const S = {
   kpiAmt: { fontWeight: 700, color: "#1f2937" },
   kpiOk: { border: "none", background: "#16a34a", color: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: "0.82rem", cursor: "pointer", fontWeight: 600 },
   kpiNo: { border: "1px solid #fecaca", background: "#fff", color: "#dc2626", borderRadius: 8, padding: "6px 12px", fontSize: "0.82rem", cursor: "pointer" },
+  // ── ค่าเที่ยวจากระบบจัดส่ง (proposals) ──
+  tripBox: { background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "1rem", marginBottom: 16 },
+  tripHead: { fontWeight: 700, color: "#92400e", fontSize: "1rem" },
+  tripSub: { fontSize: "0.78rem", color: "#78716c", marginTop: 2, marginBottom: 8 },
+  tripRow: { display: "flex", alignItems: "center", gap: 8, padding: "0.5rem 0", borderTop: "1px solid #fde68a", flexWrap: "wrap" },
+  tripTag: { fontSize: "0.78rem", color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 },
+  tripAmt: { fontWeight: 700, color: "#1f2937" },
+  tripUse: { border: "none", background: "#d97706", color: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: "0.82rem", cursor: "pointer", fontWeight: 600 },
+  tripOk: { border: "1px solid #d6d3d1", background: "#fff", color: "#57534e", borderRadius: 8, padding: "6px 10px", fontSize: "0.82rem", cursor: "pointer" },
+  tripFoot: { fontSize: "0.75rem", color: "#78716c", marginTop: 10, lineHeight: 1.5 },
 };
