@@ -1,7 +1,15 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.10
+// คำนวณเงินเดือน KMMH — v7.11
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.11 เปลี่ยนจาก v7.10:
+//   • [เบี้ยขยัน] เลิกใช้ /ลา|ขาด/ ลอยๆ กับ hr_note — โน้ตอัตโนมัติของระบบมีคำว่า
+//     "เรียงเวลาอัตโนมัติ" ซึ่งมี "ลา" ซ่อนอยู่ใน "เวลา" → ถูกนับเป็นวันลา
+//     ทำเบี้ยขยันหายทั้งเดือนเงียบๆ (เคสจ๋า/ตู่ ก.ค.69 คนละ 500)
+//     เปลี่ยนเป็นรายการคำลาจริง LEAVE_NOTE_RE
+//   • [ปกส.] เริ่มเป็นพนักงานประจำ "วันที่ 1" = ประจำทั้งเดือน ไม่ใช่เข้ากลางเดือน
+//     เดิมฐาน ปกส. ใช้ค่าแรงที่หักวันขาดแล้ว → ปกส.ต่ำกว่าจริง (เคสไนท์ ก.ค.69 408.87 ควรเป็น 487.50)
 //
 // 🔧 v7.10 เปลี่ยนจาก v7.9:
 //   • export midLeaveFactor เป็น single source ให้ WeeklyPage คิดรอบเสาร์ตามชั่วโมงตรงกัน
@@ -172,6 +180,10 @@ export function calcLateDeduction(lateMin, ratePerMin, hourlyRate) {
   return hourlyRate * fullHours + remainder * rate;
 }
 
+// คำใน hr_note ที่นับว่า "ลา/ขาด" จริง (ใช้ตัดเบี้ยขยัน)
+// ⚠️ ห้ามใช้ /ลา/ ลอยๆ — โน้ตอัตโนมัติ "ระบบ dedupe+เรียงเวลาอัตโนมัติ" มี "ลา" อยู่ใน "เวลา"
+const LEAVE_NOTE_RE = /ขาดงาน|ขาดครึ่งวัน|ลาป่วย|ลากิจ|ลาพักร้อน|ลาคลอด|ลาบวช|ลาครึ่งวัน|ลาไม่รับค่าจ้าง|ขาด\/ลา/;
+
 // เบี้ยขยัน — trial ไม่ได้เลย
 function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
   if (empType !== "permanent") return 0;
@@ -318,8 +330,10 @@ export async function calcPayroll(year, month) {
 
     // จุดตัดเข้าประจำกลางเดือน
     const permStart = emp.permanent_start_date;
+    // 🔧 v7.11 — เริ่มประจำ "วันที่ 1" = ประจำทั้งเดือน (ไม่ใช่เข้ากลางเดือน)
+    //   ไม่งั้นฐาน ปกส. จะใช้ perm_base ที่หักวันขาด/ไม่รวมวันอาทิตย์ → ปกส.ต่ำกว่าจริง
     const permStartInMonth = permStart &&
-      permStart >= dateFrom && permStart <= dateTo;
+      permStart > dateFrom && permStart <= dateTo;
 
     let work_days    = 0;
     let ot_hours     = 0;
@@ -373,7 +387,7 @@ export async function calcPayroll(year, month) {
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
       if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) leave_days += 0.5; // นับเฉพาะ "ลา" จริง (ไม่นับขาดงานครึ่งวัน)
-      if (log.hr_note && /ลา|ขาด/.test(log.hr_note)) has_leave = true;
+      if (log.hr_note && LEAVE_NOTE_RE.test(log.hr_note)) has_leave = true;
       if (isMidLeave) has_leave = true; // 🆕 v7.9 ออกระหว่างวัน → ตัดเบี้ยขยันด้วย
     }
 
