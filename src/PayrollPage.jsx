@@ -6,6 +6,8 @@
 //        อัตโนมัติ (ตั้งต้นจ่ายสิ้นเดือน) — ยอดสุทธิหน้านี้ยังรวม OT ตามเดิม
 // 🔧 v5: ตารางเต็มความกว้างจอ + ตรึงคอลัมน์ "ชื่อ" ให้ติดซ้ายตลอดเวลาเลื่อน
 // 🔧 v6: ป็อปอัปรายคนโชว์บรรทัด "คืนค่าประกันงาน" + "คืนค่าสมัครงาน" (เฉพาะตอนลาออก > 0)
+// 🔔 v7: แถบแจ้งเตือน HR เมื่อมีการแก้ข้อมูลพนักงานที่กระทบยอดเงิน (employee_change_alerts)
+//        ค้างอยู่จนกว่าจะกด "รับทราบ" — ตัวเตือนไม่ให้ลืมคำนวณเงินเดือนใหม่
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import { calcPayroll, savePayrollResults } from "./payrollCalc";
@@ -16,6 +18,27 @@ const MONTHS_TH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค
 
 const fmt    = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtInt = (n) => Number(n || 0).toLocaleString("th-TH");
+
+// 🔔 แปลงค่าดิบในฐานข้อมูลให้อ่านรู้เรื่องในแถบแจ้งเตือน
+const VAL_TH = {
+  permanent:"ประจำ", trial:"ทดลองงาน",
+  saturday:"รับรายเสาร์", month_end:"รับสิ้นเดือน",
+  none:"ไม่หัก",
+};
+function fmtAlertVal(field, v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (VAL_TH[v]) return VAL_TH[v];
+  if (["monthly_salary","daily_rate","position_allowance","insurance_level"].includes(field)) {
+    const n = Number(v);
+    if (!isNaN(n)) return n.toLocaleString("th-TH", { maximumFractionDigits:2 }) + " บ.";
+  }
+  return String(v);
+}
+function fmtAlertTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString("th-TH", { day:"numeric", month:"short", year:"2-digit" })
+       + " " + d.toLocaleTimeString("th-TH", { hour:"2-digit", minute:"2-digit" }) + " น.";
+}
 
 export default function PayrollPage({ role }) {
   const now = new Date();
@@ -29,6 +52,8 @@ export default function PayrollPage({ role }) {
   const [detail,    setDetail]    = useState(null);
 
   // 🔒 สถานะงวด (ปิดแล้ว = ห้ามบันทึกทับ)
+  const [alerts,     setAlerts]     = useState([]);     // 🔔 การแก้ข้อมูลพนักงานที่ยังไม่รับทราบ
+  const [acking,     setAcking]     = useState(null);   // id | "all"
   const [periodInfo, setPeriodInfo] = useState(null);   // { id, is_closed } | "none" | null(กำลังโหลด)
   const [unlocking,  setUnlocking]  = useState(false);
 
@@ -41,6 +66,33 @@ export default function PayrollPage({ role }) {
   }, [year, month]);
 
   useEffect(() => { loadPeriod(); }, [loadPeriod]);
+
+  // 🔔 โหลดรายการแก้ข้อมูลพนักงานที่ยังไม่มีใครกดรับทราบ
+  const loadAlerts = useCallback(async () => {
+    const { data } = await supabase
+      .from("employee_change_alerts")
+      .select("id, field, field_label, old_value, new_value, changed_at, employees(nickname, emp_code)")
+      .is("acknowledged_at", null)
+      .order("changed_at", { ascending: false })
+      .limit(30);
+    setAlerts(data || []);
+  }, []);
+
+  useEffect(() => { loadAlerts(); }, [loadAlerts]);
+
+  const ackAlert = async (id) => {
+    setAcking(id);
+    try {
+      const patch = { acknowledged_at: new Date().toISOString(), acknowledged_by: role || null };
+      let q = supabase.from("employee_change_alerts").update(patch).is("acknowledged_at", null);
+      q = id === "all" ? q.in("id", alerts.map(a => a.id)) : q.eq("id", id);
+      const { error } = await q;
+      if (error) throw error;
+      await loadAlerts();
+    } catch (e) {
+      setMsg({ type:"error", text:"❌ กดรับทราบไม่สำเร็จ: " + e.message });
+    } finally { setAcking(null); }
+  };
 
   const isClosed = periodInfo && periodInfo !== "none" && periodInfo.is_closed === true;
 
@@ -127,6 +179,40 @@ export default function PayrollPage({ role }) {
           {loading ? "⏳ กำลังคำนวณ..." : "🧮 คำนวณเงินเดือน"}
         </button>
       </div>
+
+      {/* ── 🔔 แจ้งเตือน: มีการแก้ข้อมูลพนักงานที่กระทบยอดเงิน ── */}
+      {alerts.length > 0 && (
+        <div style={s.alertBar}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+            <span style={{ fontWeight:800, fontSize:14 }}>
+              🔔 มีการแก้ข้อมูลพนักงาน {alerts.length} รายการ
+            </span>
+            <span style={{ fontSize:12, color:"#92400e", flex:1 }}>
+              ยอดที่คำนวณไว้ก่อนหน้าอาจไม่ตรงแล้ว — ตรวจแล้วกด &quot;คำนวณเงินเดือน&quot; ใหม่
+            </span>
+            <button onClick={() => ackAlert("all")} disabled={acking !== null}
+              style={{ ...s.btn, background:"#b45309", color:"#fff", padding:"5px 10px", fontSize:12 }}>
+              {acking === "all" ? "⏳..." : "✓ รับทราบทั้งหมด"}
+            </button>
+          </div>
+          {alerts.map(a => (
+            <div key={a.id} style={s.alertRow}>
+              <span style={{ fontWeight:700, minWidth:110 }}>
+                {a.employees?.nickname || "-"}{a.employees?.emp_code ? ` (${a.employees.emp_code})` : ""}
+              </span>
+              <span style={{ color:"#78350f" }}>{a.field_label}</span>
+              <span style={{ color:"#94a3b8" }}>{fmtAlertVal(a.field, a.old_value)}</span>
+              <span style={{ color:"#78350f" }}>→</span>
+              <span style={{ fontWeight:800, color:"#b45309" }}>{fmtAlertVal(a.field, a.new_value)}</span>
+              <span style={{ fontSize:12, color:"#a16207", marginLeft:"auto" }}>{fmtAlertTime(a.changed_at)}</span>
+              <button onClick={() => ackAlert(a.id)} disabled={acking !== null}
+                style={{ ...s.btn, background:"#fff", color:"#b45309", border:"1px solid #fcd34d", padding:"3px 9px", fontSize:12 }}>
+                {acking === a.id ? "⏳" : "✓ รับทราบ"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── 🔒 ป้ายสถานะงวด ── */}
       {isClosed && (
@@ -384,6 +470,9 @@ const s = {
   input:  { width:80, padding:"6px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14, textAlign:"center" },
   select: { padding:"6px 10px", border:"1.5px solid #e2e8f0", borderRadius:8, fontSize:14 },
   btn:        { padding:"10px 20px", borderRadius:10, border:"none", fontWeight:700, fontSize:14, cursor:"pointer" },
+  alertBar:   { background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:12, padding:"12px 14px", marginBottom:12, color:"#92400e" },
+  alertRow:   { display:"flex", alignItems:"center", flexWrap:"wrap", gap:8, fontSize:13,
+                padding:"6px 0", borderTop:"1px dashed #fde68a" },
   btnPrimary: { background:"#2563eb", color:"#fff" },
   btnSuccess: { background:"#16a34a", color:"#fff" },
   btnExcel:   { background:"#0f766e", color:"#fff" },
