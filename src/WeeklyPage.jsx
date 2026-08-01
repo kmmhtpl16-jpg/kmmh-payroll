@@ -134,6 +134,8 @@ export default function WeeklyPage({ role }) {
   const [leaveSum,     setLeaveSum]     = useState({});     // employee_id -> v_leave_balance_summary row
   const [leaveMonth,   setLeaveMonth]   = useState({});     // employee_id -> {sick:{days,dates}, personal:{days,dates}}
   const [dedByType,    setDedByType]    = useState({});     // employee_id -> [{name, amount}] (หักจริงแยกตามแท็ก, ตัดเงินออก)
+  const [lockModal,    setLockModal]    = useState(false);  // 🆕 เด้งถามล็อกยอดหลังอนุมัติใบสิ้นเดือน
+  const [locking,      setLocking]      = useState(false);
   const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
@@ -395,8 +397,25 @@ export default function WeeklyPage({ role }) {
       if (error) throw error;
       setMsg({ type:"ok", text:"✅ อนุมัติใบเบิกแล้ว" });
       await loadAll();
+      // 🆕 ใบสิ้นเดือนอนุมัติแล้ว → เด้งถามล็อกยอดงวดทันที (ยังไม่ล็อกจนกว่าจะกด)
+      if (cycleKey === "month_end" && role === "owner" && !period?.is_closed) setLockModal(true);
     } catch(e) { setMsg({ type:"error", text:"❌ "+e.message }); }
     finally { setApproving(null); }
+  }
+
+  // 🆕 ล็อกยอดงวด (ปิดงวด) — เรียกจากหน้าต่างที่เด้งหลังอนุมัติใบสิ้นเดือน
+  async function lockPeriodNow() {
+    if (!period) return;
+    setLocking(true);
+    try {
+      const { error } = await supabase.from("pay_periods")
+        .update({ is_closed: true, closed_at: new Date().toISOString() }).eq("id", period.id);
+      if (error) throw error;
+      setLockModal(false);
+      setMsg({ type:"ok", text:"🔒 ล็อกยอดงวดนี้แล้ว — บันทึกทับไม่ได้จนกว่าจะเปิดงวด (หน้าเงินเดือน)" });
+      await loadAll();
+    } catch(e) { setMsg({ type:"error", text:"❌ ล็อกไม่สำเร็จ: "+e.message }); }
+    finally { setLocking(false); }
   }
 
   async function returnVoucher() {
@@ -893,6 +912,34 @@ export default function WeeklyPage({ role }) {
           </div>
         );
       })()}
+
+      {/* 🆕 หน้าต่างถามล็อกยอด หลังอนุมัติใบเบิกสิ้นเดือน */}
+      {lockModal && (
+        <div style={s.modalOverlay}>
+          <div style={{ ...s.modal, width:420 }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding:"18px 20px", borderBottom:"1px solid #f1f5f9" }}>
+              <p style={{ margin:0, fontWeight:800, fontSize:17, color:"#166534" }}>✅ อนุมัติใบเบิกสิ้นเดือนแล้ว</p>
+            </div>
+            <div style={{ padding:"18px 20px", fontSize:14, color:"#334155", lineHeight:1.7 }}>
+              <p style={{ margin:"0 0 10px" }}>
+                ล็อกยอดงวด <b>{MONTHS_SHORT[month]} {year < 2500 ? year + 543 : year}</b> เลยไหม?
+              </p>
+              <p style={{ margin:0, fontSize:13, color:"#64748b" }}>
+                ล็อกแล้วจะกัน &quot;คำนวณเงินเดือน + บันทึกลง DB&quot; เขียนทับยอดที่จ่ายจริงไปแล้ว
+                (ยังพิมพ์สลิป / ดูรายงานได้ตามปกติ · ปลดล็อกได้ที่หน้า 💰 เงินเดือน ปุ่ม 🔓 เปิดงวด)
+              </p>
+            </div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end", padding:"14px 20px", borderTop:"1px solid #f1f5f9" }}>
+              <button onClick={() => setLockModal(false)} disabled={locking}
+                style={{ ...s.markBtn, background:"#e2e8f0", color:"#334155" }}>ไว้ก่อน</button>
+              <button onClick={lockPeriodNow} disabled={locking}
+                style={{ ...s.markBtn, background:"#b91c1c", opacity:locking?0.6:1 }}>
+                {locking ? "⏳..." : "🔒 ล็อกยอดงวดนี้"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {detail && <DetailModal detail={detail} onClose={() => setDetail(null)} />}
 
