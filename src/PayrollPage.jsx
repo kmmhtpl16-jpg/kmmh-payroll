@@ -34,6 +34,11 @@ function fmtAlertVal(field, v) {
   }
   return String(v);
 }
+const ROLE_TH = { owner:"เจ้าของ", hr:"HR", employee:"พนักงาน" };
+function fmtAlertWho(role) {
+  if (!role) return "ระบบ/หลังบ้าน";
+  return ROLE_TH[role] || role;
+}
 function fmtAlertTime(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString("th-TH", { day:"numeric", month:"short", year:"2-digit" })
@@ -71,7 +76,7 @@ export default function PayrollPage({ role }) {
   const loadAlerts = useCallback(async () => {
     const { data } = await supabase
       .from("employee_change_alerts")
-      .select("id, field, field_label, old_value, new_value, changed_at, employees(nickname, emp_code)")
+      .select("id, field, field_label, old_value, new_value, changed_at, changed_by_role, employees(nickname, emp_code)")
       .is("acknowledged_at", null)
       .order("changed_at", { ascending: false })
       .limit(30);
@@ -204,7 +209,9 @@ export default function PayrollPage({ role }) {
               <span style={{ color:"#94a3b8" }}>{fmtAlertVal(a.field, a.old_value)}</span>
               <span style={{ color:"#78350f" }}>→</span>
               <span style={{ fontWeight:800, color:"#b45309" }}>{fmtAlertVal(a.field, a.new_value)}</span>
-              <span style={{ fontSize:12, color:"#a16207", marginLeft:"auto" }}>{fmtAlertTime(a.changed_at)}</span>
+              <span style={{ fontSize:12, color:"#a16207", marginLeft:"auto" }}>
+                แก้โดย <b style={{ color:"#92400e" }}>{fmtAlertWho(a.changed_by_role)}</b> · {fmtAlertTime(a.changed_at)}
+              </span>
               <button onClick={() => ackAlert(a.id)} disabled={acking !== null}
                 style={{ ...s.btn, background:"#fff", color:"#b45309", border:"1px solid #fcd34d", padding:"3px 9px", fontSize:12 }}>
                 {acking === a.id ? "⏳" : "✓ รับทราบ"}
