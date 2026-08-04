@@ -72,7 +72,11 @@ export default function EmployeesPage() {
   const [insBalance, setInsBalance] = useState(null)     // ยอดประกันคงเหลือ (null = กำลังโหลด)
   const [resignSaving, setResignSaving] = useState(false)
 
-  useEffect(() => { fetchEmployees() }, [])
+  // 🆕 เชื่อมกับโปรแกรมประเมินพนักงานหน้าร้าน (staff_eval_roster) — ใช้ชุดข้อมูลพนักงานเดียวกัน
+  const [evalRoster, setEvalRoster] = useState({})   // { [emp_code]: row }
+  const [evalBusy, setEvalBusy] = useState(null)     // emp_code ที่กำลังบันทึก
+
+  useEffect(() => { fetchEmployees(); fetchEvalRoster() }, [])
 
   // 🆕 ออโต้เติม "ค่าแรงวัน" สำหรับพนักงานประจำ = เงินเดือน ÷ วันในเดือนปัจจุบัน
   //    (พนักงานประจำไม่ต้องกรอกค่าแรงวันเอง — ระบบคำนวณให้จากเงินเดือน)
@@ -93,6 +97,62 @@ export default function EmployeesPage() {
     if (error) showToast('โหลดข้อมูลไม่ได้: ' + error.message, 'error')
     else setEmployees(data || [])
     setLoading(false)
+  }
+
+  // ── 🆕 โปรแกรมประเมินหน้าร้าน: อ่าน/ส่งชื่อ ────────────────────────────────
+  async function fetchEvalRoster() {
+    const { data, error } = await supabase
+      .from('staff_eval_roster')
+      .select('id,name,emp_code,active,sort,bonus_eligible')
+    if (error) return
+    const map = {}
+    for (const r of (data || [])) if (r.emp_code) map[r.emp_code] = r
+    setEvalRoster(map)
+  }
+
+  // ส่งชื่อพนักงานเข้าโปรแกรมประเมินหน้าร้าน (ผูกด้วยรหัสพนักงาน ไม่ผูกด้วยชื่อ)
+  async function sendToEval(emp) {
+    if (!emp.emp_code) {
+      showToast('ต้องใส่รหัสพนักงานก่อน (กดแก้ไข → รหัสพนักงาน)', 'error'); return
+    }
+    setEvalBusy(emp.emp_code)
+    const maxSort = Math.max(0, ...Object.values(evalRoster).map(r => Number(r.sort) || 0))
+    const { error } = await supabase.from('staff_eval_roster').insert({
+      name: emp.nickname,
+      emp_code: emp.emp_code,
+      active: true,
+      sort: maxSort + 1,
+      bonus_eligible: emp.emp_type === 'permanent',   // ทดลองงาน = ร่วมประเมินได้ แต่ยังไม่นับโบนัส
+    })
+    setEvalBusy(null)
+    if (error) showToast('ส่งไม่สำเร็จ: ' + error.message, 'error')
+    else {
+      showToast(`ส่ง ${emp.nickname} เข้าโปรแกรมประเมินหน้าร้านแล้ว ✓` +
+        (emp.emp_type === 'permanent' ? '' : ' (ทดลองงาน — ยังไม่นับโบนัส)'))
+      fetchEvalRoster()
+    }
+  }
+
+  async function setEvalActive(emp, on) {
+    if (!on && !window.confirm(`นำ ${emp.nickname} ออกจากโปรแกรมประเมินหน้าร้าน?\n(ประวัติที่ขีดไว้ยังอยู่ครบ กดกลับเข้าใหม่ได้)`)) return
+    setEvalBusy(emp.emp_code)
+    const { error } = await supabase.from('staff_eval_roster')
+      .update({ active: on }).eq('emp_code', emp.emp_code)
+    setEvalBusy(null)
+    if (error) showToast('บันทึกไม่ได้: ' + error.message, 'error')
+    else { showToast(on ? `${emp.nickname} กลับเข้าประเมินแล้ว` : `นำ ${emp.nickname} ออกจากประเมินแล้ว`); fetchEvalRoster() }
+  }
+
+  async function toggleEvalBonus(emp) {
+    const cur = evalRoster[emp.emp_code]
+    if (!cur) return
+    const next = !(cur.bonus_eligible !== false)
+    setEvalBusy(emp.emp_code)
+    const { error } = await supabase.from('staff_eval_roster')
+      .update({ bonus_eligible: next }).eq('emp_code', emp.emp_code)
+    setEvalBusy(null)
+    if (error) showToast('บันทึกไม่ได้: ' + error.message, 'error')
+    else { showToast(next ? `${emp.nickname} เริ่มนับโบนัสความกระตือรือร้นแล้ว` : `${emp.nickname} ยังไม่นับโบนัส (ร่วมประเมินได้ตามปกติ)`); fetchEvalRoster() }
   }
 
   function showToast(msg, type = 'success') {
@@ -319,16 +379,16 @@ export default function EmployeesPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#fafafa' }}>
-              {['พนักงาน','ประเภท','ค่าแรงวัน','เงินเดือน','รอบจ่าย','ประกันงาน','สถานะ',''].map((h, i) => (
+              {['พนักงาน','ประเภท','ค่าแรงวัน','เงินเดือน','รอบจ่าย','ประกันงาน','สถานะ','ประเมินหน้าร้าน',''].map((h, i) => (
                 <th key={i} style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 500, color: '#888', fontSize: 12, borderBottom: '0.5px solid #e5e5e5', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#aaa' }}>กำลังโหลด...</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: '#aaa' }}>กำลังโหลด...</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 32, color: '#aaa' }}>ไม่พบพนักงาน</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 32, color: '#aaa' }}>ไม่พบพนักงาน</td></tr>
             ) : filtered.map((e, i) => {
               const col = getColor(i)
               return (
@@ -381,6 +441,43 @@ export default function EmployeesPage() {
                     <span style={{ background: e.is_active ? '#EAF3DE' : '#F1EFE8', color: e.is_active ? '#27500A' : '#444', padding: '3px 8px', borderRadius: 99, fontSize: 11, fontWeight: 500 }}>
                       {e.is_active ? 'ทำงานอยู่' : 'ลาออกแล้ว'}
                     </span>
+                  </td>
+                  {/* 🆕 โปรแกรมประเมินพนักงานหน้าร้าน */}
+                  <td style={{ padding: '10px 12px' }}>
+                    {(() => {
+                      const ev = e.emp_code ? evalRoster[e.emp_code] : null
+                      const busy = evalBusy === e.emp_code
+                      if (!ev) return (
+                        <button disabled={busy || !e.is_active} onClick={() => sendToEval(e)}
+                          title="ส่งชื่อคนนี้เข้าโปรแกรมประเมินความขยันพนักงานหน้าร้าน"
+                          style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: (busy || !e.is_active) ? 'default' : 'pointer', fontSize: 12, color: e.is_active ? '#0C447C' : '#bbb', whiteSpace: 'nowrap' }}>
+                          {busy ? 'กำลังส่ง...' : '➕ ส่งเข้าประเมิน'}
+                        </button>
+                      )
+                      if (!ev.active) return (
+                        <button disabled={busy} onClick={() => setEvalActive(e, true)}
+                          style={{ background: 'none', border: '0.5px solid #ddd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, color: '#666', whiteSpace: 'nowrap' }}>
+                          ปิดอยู่ · เปิดใหม่
+                        </button>
+                      )
+                      const bonus = ev.bonus_eligible !== false
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                          <span style={{ background: '#EAF3DE', color: '#27500A', padding: '3px 8px', borderRadius: 99, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                            ✓ อยู่ในประเมิน
+                          </span>
+                          <button disabled={busy} onClick={() => toggleEvalBonus(e)}
+                            title="สลับว่านับเงินรางวัลรายเดือนหรือยัง"
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10.5, color: bonus ? '#888' : '#B26A00', textDecoration: 'underline', whiteSpace: 'nowrap' }}>
+                            {bonus ? 'นับโบนัส' : '⏳ ยังไม่นับโบนัส'}
+                          </button>
+                          <button disabled={busy} onClick={() => setEvalActive(e, false)}
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10.5, color: '#A32D2D', whiteSpace: 'nowrap' }}>
+                            นำออก
+                          </button>
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td style={{ padding: '10px 12px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
