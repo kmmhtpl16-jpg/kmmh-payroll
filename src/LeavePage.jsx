@@ -6,6 +6,22 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 
+// 🆕 v2 [private receipts] bucket "receipts" เป็นแบบส่วนตัว (ไม่ public)
+//     ลิงก์ .../object/public/receipts/... จะขึ้น 404 "Bucket not found" เสมอ
+//     → ต้องขอ signed URL ตอนกดดู (อายุ 1 ชม.) และเก็บ "path" ลง DB แทน URL เต็ม
+export function receiptPath(v) {
+  if (!v) return null;
+  const m = String(v).match(/\/receipts\/(.+)$/);   // รองรับ URL เต็มแบบเก่า
+  return m ? decodeURIComponent(m[1].split("?")[0]) : String(v);
+}
+async function signedReceiptUrl(v) {
+  const path = receiptPath(v);
+  if (!path) return null;
+  const { data, error } = await supabase.storage.from("receipts").createSignedUrl(path, 3600);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
 // ── สี theme (ม่วง ตาม payroll หลัก) ──
 const C = {
   primary:   "#7c3aed",
@@ -229,8 +245,7 @@ export default function LeavePage({ role }) {
           .from("receipts")
           .upload(path, receiptFile, { upsert: false });
         if (upErr) throw new Error("อัปโหลดรูปไม่สำเร็จ: " + upErr.message);
-        const { data: { publicUrl } } = supabase.storage.from("receipts").getPublicUrl(path);
-        receiptUrl = publicUrl;
+        receiptUrl = path;   // 🆕 เก็บ path ไม่เก็บ public URL (bucket ส่วนตัว)
         receiptSizeKb = kbSize(receiptFile);
       }
 
@@ -314,7 +329,20 @@ export default function LeavePage({ role }) {
     loadRecords(selectedEmp);
   };
 
-  const typeColor = (t) => LEAVE_TYPES.find(x => x.value === t)?.color || C.muted; async function uploadReceipt(rec, file){ if(!file) return; try{ const comp=await compressImage(file); const path=`leave/${rec.employee_id}/${rec.leave_date}_${rec.leave_type}_${Date.now()}.jpg`; const up=await supabase.storage.from("receipts").upload(path, comp, { upsert:false }); if(up.error) throw new Error(up.error.message); const pub=supabase.storage.from("receipts").getPublicUrl(path); const upd=await supabase.from("leave_requests").update({ receipt_url:pub.data.publicUrl, receipt_size_kb:kbSize(comp) }).eq("id", rec.id); if(upd.error) throw new Error(upd.error.message); loadRecords(selectedEmp); }catch(e){ alert("อัปโหลดรูปไม่สำเร็จ: "+e.message); } }
+  // 🆕 v2 เปิดเอกสารแนบ: เปิดแท็บ "ทันที" ตอนกด (กัน iOS บล็อก) แล้วค่อยใส่ signed URL
+  const openReceipt = async (val) => {
+    const w = window.open("", "_blank");
+    try {
+      const url = await signedReceiptUrl(val);
+      if (!url) throw new Error("ไม่พบไฟล์แนบ");
+      if (w) w.location.href = url; else window.location.href = url;
+    } catch (e) {
+      if (w) w.close();
+      alert("เปิดเอกสารไม่สำเร็จ: " + e.message);
+    }
+  };
+
+  const typeColor = (t) => LEAVE_TYPES.find(x => x.value === t)?.color || C.muted; async function uploadReceipt(rec, file){ if(!file) return; try{ const comp=await compressImage(file); const path=`leave/${rec.employee_id}/${rec.leave_date}_${rec.leave_type}_${Date.now()}.jpg`; const up=await supabase.storage.from("receipts").upload(path, comp, { upsert:false }); if(up.error) throw new Error(up.error.message); const upd=await supabase.from("leave_requests").update({ receipt_url:path, receipt_size_kb:kbSize(comp) }).eq("id", rec.id); if(upd.error) throw new Error(upd.error.message); loadRecords(selectedEmp); }catch(e){ alert("อัปโหลดรูปไม่สำเร็จ: "+e.message); } }
   const typeBg    = (t) => LEAVE_TYPES.find(x => x.value === t)?.bg    || "#f9fafb";
   const typeLabel = (t) => LEAVE_TYPES.find(x => x.value === t)?.label || t;
 
@@ -618,10 +646,11 @@ export default function LeavePage({ role }) {
                     </p>
                   )}
                   {r.receipt_url ? (
-                    <a href={r.receipt_url} target="_blank" rel="noreferrer"
-                      style={{ fontSize:12, color:C.personal, textDecoration:"underline" }}>
+                    <button type="button" onClick={() => openReceipt(r.receipt_url)}
+                      style={{ fontSize:12, color:C.personal, textDecoration:"underline",
+                        background:"none", border:"none", padding:0, cursor:"pointer" }}>
                       📎 ดูเอกสาร
-                    </a>) : (r.leave_type !== "absent" && (<label style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:12, color:C.personal, cursor:"pointer", textDecoration:"underline" }}>📎 แนบรูปใบลา<input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadReceipt(r, e.target.files[0])} /></label>)
+                    </button>) : (r.leave_type !== "absent" && (<label style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:12, color:C.personal, cursor:"pointer", textDecoration:"underline" }}>📎 แนบรูปใบลา<input type="file" accept="image/*,application/pdf" style={{ display:"none" }} onChange={e => uploadReceipt(r, e.target.files[0])} /></label>)
                   )}
                 </div>
                 {role === "owner" && (
