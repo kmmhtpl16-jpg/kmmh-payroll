@@ -97,6 +97,9 @@ export default function AttendancePage({ role }) {
   const [loadingImports, setLoadingImports] = useState(false);
   const [activeSection, setActiveSection] = useState("upload");
   const [conflictRows, setConflictRows] = useState(null); // 🔧 v3 [import guard] modal เตือนทับ
+  // 🆕 v4 [device map] ตารางจับคู่เลขเครื่องสแกนนิ้ว → รหัสพนักงาน (อ่านจาก DB: device_user_map)
+  const [deviceMap, setDeviceMap] = useState({});
+  const [skippedRows, setSkippedRows] = useState([]); // แถวในไฟล์ที่ไม่รู้จักเลขเครื่อง → เคยถูกข้ามเงียบๆ
 
   const [reviewLogs, setReviewLogs] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
@@ -109,7 +112,24 @@ export default function AttendancePage({ role }) {
   const [histMonth, setHistMonth]     = useState(currentMonthKey());   // 📅 กรองเดือนคลังไฟล์
   const [reviewMonth, setReviewMonth] = useState(currentMonthKey());   // 📅 กรองเดือนแก้ไขย้อนหลัง
 
-  useEffect(() => { loadEmployees(); loadHistory(); }, []);
+  useEffect(() => { loadEmployees(); loadDeviceMap(); loadHistory(); }, []);
+
+  // 🆕 v4 [device map] อ่านตารางจับคู่จากฐานข้อมูล → { "19": "K019", ... }
+  //     เพิ่มพนักงานใหม่ = เพิ่มแถวใน device_user_map ก็พอ ไม่ต้องแก้โค้ด
+  const loadDeviceMap = async () => {
+    const [{ data: maps }, { data: emps }] = await Promise.all([
+      supabase.from("device_user_map").select("device_uid, device_name, employee_id"),
+      supabase.from("employees").select("id, emp_code"),
+    ]);
+    const codeById = {};
+    (emps || []).forEach((e) => { codeById[e.id] = e.emp_code; });
+    const m = {};
+    (maps || []).forEach((r) => {
+      const code = codeById[r.employee_id];
+      if (code) m[String(r.device_uid).trim()] = code;
+    });
+    setDeviceMap(m);
+  };
 
   const loadEmployees = async () => {
     const { data } = await supabase
@@ -302,7 +322,15 @@ export default function AttendancePage({ role }) {
     setFileName(file.name);
     setSaveResult(null);
     const text = await file.text();
-    const { rows } = parseZKTecoCSV(text);
+    const { rows, skipped } = parseZKTecoCSV(text, deviceMap);
+    // 🆕 v4 รวมเลขเครื่องที่ไม่รู้จัก (เดิมถูกข้ามเงียบๆ) → ขึ้นกล่องเตือนสีแดง
+    const uniq = {};
+    (skipped || []).forEach((k) => {
+      const key = String(k.devUid);
+      if (!uniq[key]) uniq[key] = { devUid: key, devName: k.devName || "—", count: 0 };
+      uniq[key].count += 1;
+    });
+    setSkippedRows(Object.values(uniq));
     setProcessed(processAttendance(rows, employees));
   };
 
@@ -312,6 +340,15 @@ export default function AttendancePage({ role }) {
   // 🔧 v3 [import guard] กดบันทึก → เช็คก่อนว่าจะทับข้อมูลสำคัญไหม ถ้าใช่เปิด modal
   const handleSave = async () => {
     if (processed.length === 0) return;
+    // 🆕 v4 กันบันทึกแถวที่จับคู่พนักงานไม่ได้ (employee_id ว่าง) — บันทึกไปก็ไม่เข้าใคร
+    const noEmp = processed.filter((r) => !r.employee_id);
+    if (noEmp.length > 0) {
+      window.alert(
+        `⚠️ มี ${noEmp.length} แถวที่ยังจับคู่พนักงานไม่ได้ (${[...new Set(noEmp.map(r=>r.emp_code))].join(", ")})\n` +
+        `กรุณาเพิ่มพนักงานในแท็บพนักงาน / ผูกเลขเครื่องสแกนนิ้วก่อน แล้วเลือกไฟล์ใหม่อีกครั้ง`
+      );
+      return;
+    }
     if (reviewCount > 0) {
       const ok = window.confirm(
         `⚠️ มี ${reviewCount} รายการต้องตรวจ\nบันทึกทั้งหมด ${processed.length} รายการเลยไหม?\n(แก้ภายหลังได้ในแท็บ "แก้ไขย้อนหลัง")`
@@ -415,6 +452,24 @@ export default function AttendancePage({ role }) {
               {fileName ? `✅ ${fileName}` : "แตะเพื่อเลือกไฟล์ CSV จาก ZKTime.Net"}
             </span>
           </label>
+
+          {/* 🆕 v4 [device map] เตือนแถวที่ไม่รู้จักเลขเครื่อง — เดิมถูกข้ามทิ้งเงียบๆ */}
+          {skippedRows.length > 0 && (
+            <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:10, padding:"10px 12px", marginBottom:12 }}>
+              <p style={{ margin:"0 0 6px", fontWeight:700, color:"#991b1b", fontSize:14 }}>
+                ⚠️ มี {skippedRows.reduce((t,r)=>t+r.count,0)} แถวในไฟล์ที่ยังไม่รู้จัก — ไม่ได้ถูกนำเข้า
+              </p>
+              <ul style={{ margin:"0 0 6px 18px", padding:0, color:"#7f1d1d", fontSize:13 }}>
+                {skippedRows.map((r) => (
+                  <li key={r.devUid}>เลขเครื่อง <b>{r.devUid}</b> · ชื่อในเครื่อง “{r.devName}” · {r.count} แถว</li>
+                ))}
+              </ul>
+              <p style={{ margin:0, fontSize:12, color:"#7f1d1d" }}>
+                ถ้าเป็นพนักงานใหม่ → เพิ่มชื่อในแท็บ 👤 พนักงาน แล้วผูกเลขเครื่องในตาราง device_user_map
+                (ถ้าเป็นคนลาออก/เครื่อง PC ปล่อยผ่านได้)
+              </p>
+            </div>
+          )}
 
           {processed.length > 0 && (
             <div style={s.summaryBar}>

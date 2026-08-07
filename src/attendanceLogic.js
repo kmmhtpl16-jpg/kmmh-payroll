@@ -46,7 +46,7 @@ export const PERMANENT_CODES = new Set([
 export const DEVICE_MAP = {
   "1":"K003","2":"K004","3":"K011","5":"K013","6":"K007","7":"K014",
   "8":"K008","9":"K018","10":"K017","11":"K016","12":"K009","13":"K005",
-  "14":"K001","15":"K002","16":"K010","17":"K006","21":"K012","23":"K015",
+  "14":"K001","15":"K002","16":"K010","17":"K006","19":"K019","21":"K012","23":"K015",
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -281,7 +281,10 @@ function assignPunches(ins, outs, isSat = false) {
 //           checkIn, lunchOut, lunchIn, checkOut,
 //           needsReview, reason }
 // ════════════════════════════════════════════════════════════════
-export function parseZKTecoCSV(text) {
+//   🆕 dbMap = ตารางจับคู่จากฐานข้อมูล (device_user_map) — ใส่มาแล้วจะทับตารางในโค้ด
+//        พนักงานใหม่เพิ่มใน DB ได้เลย ไม่ต้องแก้โค้ด
+export function parseZKTecoCSV(text, dbMap) {
+  const MAP = { ...DEVICE_MAP, ...(dbMap || {}) };
   text = text.replace(/^\uFEFF/, ""); // ลบ BOM
   const lines = text.split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return { rows: [], skipped: [] };
@@ -294,7 +297,7 @@ export function parseZKTecoCSV(text) {
     if (cols.length < 5) continue;
     const [devUid, devName, dateRaw, inS, outS] = cols.map(c => c.trim());
 
-    const empCode = DEVICE_MAP[devUid];
+    const empCode = MAP[devUid];
     if (!empCode) {
       skipped.push({ devUid, devName });
       continue;
