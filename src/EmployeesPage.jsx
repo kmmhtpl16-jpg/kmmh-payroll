@@ -223,9 +223,9 @@ export default function EmployeesPage() {
       showToast('กรุณากรอกค่าแรงวัน', 'error')
       return
     }
-    // 🆕 v3 [ค่าสมัคร] บังคับเลือก — ห้ามข้าม (ข้ามแล้วเงิน 100 หายเงียบ)
+    // 🆕 v3 [ค่าสมัคร] ต้องเลือกก่อนบันทึก (ถ้าข้าม เงิน 100 จะไม่ถูกหักแบบเงียบๆ)
     if (!form.app_fee_status) {
-      showToast('กรุณาเลือก "ค่าสมัครงาน 100 บ." ก่อนบันทึก (ห้ามข้าม)', 'error')
+      showToast('เลือกค่าสมัครงาน 100 บ. ด้วยนะคะ', 'error')
       return
     }
     setSaving(true)
@@ -642,23 +642,16 @@ export default function EmployeesPage() {
 
               <div>
                 <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>
-                  ค่าสมัครงาน 100 บ. <span style={{ color:'#dc2626', fontWeight:700 }}>*</span>
-                  <span style={{ color:'#dc2626', fontWeight:600 }}> ห้ามข้าม</span>
+                  ค่าสมัครงาน 100 บ. <span style={{ color:'#dc2626' }}>*</span>
                 </div>
                 <select value={form.app_fee_status} onChange={e => setF('app_fee_status', e.target.value)}
-                  style={{ width: '100%', height: 34, borderRadius: 8, padding: '0 8px',
-                    border: form.app_fee_status ? '0.5px solid #ccc' : '1.5px solid #dc2626',
-                    background: form.app_fee_status ? '#fff' : '#fef2f2' }}>
-                  <option value="">— กรุณาเลือก —</option>
+                  style={{ width: '100%', height: 34, borderRadius: 8, padding: '0 8px', background:'#fff',
+                    border: form.app_fee_status ? '0.5px solid #ccc' : '0.5px solid #f0a5a5' }}>
+                  <option value="">— เลือก —</option>
                   <option value="none">ยังไม่ได้เก็บ → ระบบหัก 100 ให้ในงวดเดือนแรก</option>
                   <option value="held">เก็บไว้แล้ว → ไม่หักซ้ำ (คืนให้ตอนลาออก)</option>
                   <option value="refunded">คืนไปแล้ว</option>
                 </select>
-                {!form.app_fee_status && (
-                  <div style={{ fontSize:11, color:'#dc2626', marginTop:4 }}>
-                    ⚠️ ยังไม่ได้เลือก — ถ้าข้าม เงินค่าสมัคร 100 บ. จะไม่ถูกหักและไม่มีใครรู้
-                  </div>
-                )}
               </div>
             </div>
 
