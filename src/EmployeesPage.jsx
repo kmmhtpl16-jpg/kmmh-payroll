@@ -50,7 +50,8 @@ const EMPTY_FORM = {
   emp_type: 'trial', monthly_salary: '', daily_rate: '',
   position_allowance: '0', pay_schedule: 'saturday',
   default_pay_method: 'transfer', insurance_level: 'none',
-  app_fee_status: 'held', trial_start_date: '', permanent_start_date: '',
+  // 🆕 v3 [ค่าสมัคร] ห้ามมีค่าเริ่มต้น — HR ต้องเลือกเองทุกครั้ง (เดิม default 'held' = ระบบข้ามการหัก 100 เงียบๆ)
+  app_fee_status: '', trial_start_date: '', permanent_start_date: '',
 }
 
 export default function EmployeesPage() {
@@ -191,7 +192,7 @@ export default function EmployeesPage() {
         pay_schedule: emp.pay_schedule || 'saturday',
         default_pay_method: emp.default_pay_method || 'transfer',
         insurance_level: emp.insurance_level || 'none',
-        app_fee_status: emp.app_fee_status || 'held',
+        app_fee_status: emp.app_fee_status || '',   // 🆕 v3 ไม่เดาให้ ถ้าว่างต้องเลือกเอง
         trial_start_date: emp.trial_start_date || '',
         permanent_start_date: emp.permanent_start_date || '',
       })
@@ -220,6 +221,11 @@ export default function EmployeesPage() {
     // พนักงานทดลองงาน: ต้องกรอกค่าแรงวัน
     if (!form.daily_rate) {
       showToast('กรุณากรอกค่าแรงวัน', 'error')
+      return
+    }
+    // 🆕 v3 [ค่าสมัคร] บังคับเลือก — ห้ามข้าม (ข้ามแล้วเงิน 100 หายเงียบ)
+    if (!form.app_fee_status) {
+      showToast('กรุณาเลือก "ค่าสมัครงาน 100 บ." ก่อนบันทึก (ห้ามข้าม)', 'error')
       return
     }
     setSaving(true)
@@ -635,12 +641,24 @@ export default function EmployeesPage() {
               </div>
 
               <div>
-                <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>ค่าสมัครงาน</div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>
+                  ค่าสมัครงาน 100 บ. <span style={{ color:'#dc2626', fontWeight:700 }}>*</span>
+                  <span style={{ color:'#dc2626', fontWeight:600 }}> ห้ามข้าม</span>
+                </div>
                 <select value={form.app_fee_status} onChange={e => setF('app_fee_status', e.target.value)}
-                  style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 8px' }}>
-                  <option value="none">ไม่มี</option>
-                  <option value="held">หัก 100 บ. (เดือนแรก)</option>
+                  style={{ width: '100%', height: 34, borderRadius: 8, padding: '0 8px',
+                    border: form.app_fee_status ? '0.5px solid #ccc' : '1.5px solid #dc2626',
+                    background: form.app_fee_status ? '#fff' : '#fef2f2' }}>
+                  <option value="">— กรุณาเลือก —</option>
+                  <option value="none">ยังไม่ได้เก็บ → ระบบหัก 100 ให้ในงวดเดือนแรก</option>
+                  <option value="held">เก็บไว้แล้ว → ไม่หักซ้ำ (คืนให้ตอนลาออก)</option>
+                  <option value="refunded">คืนไปแล้ว</option>
                 </select>
+                {!form.app_fee_status && (
+                  <div style={{ fontSize:11, color:'#dc2626', marginTop:4 }}>
+                    ⚠️ ยังไม่ได้เลือก — ถ้าข้าม เงินค่าสมัคร 100 บ. จะไม่ถูกหักและไม่มีใครรู้
+                  </div>
+                )}
               </div>
             </div>
 
