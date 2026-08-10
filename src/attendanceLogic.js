@@ -32,6 +32,12 @@ export const RULES = {
   // • เติมเที่ยง/เย็นทีหลังได้ → คิดสาย/OT บ่ายเหมือนวันธรรมดา หักสิ้นเดือน (เงินเสาร์จ่ายเช้าไปก่อน)
   //   • ค่าแรง → จ่ายเต็มวันเสมอ (จัดการในฝั่ง payrollCalc)
   SATURDAY_MORNING_OT: true,   // วันเสาร์ให้ OT เข้าก่อนเวลา (เข้าก่อน 07:00 ได้ OT) — OT จ่ายสิ้นเดือน
+
+  // ── 🆕 วันครึ่งวัน (ขาดงานครึ่งวัน / ลาป่วย-ลากิจครึ่งวัน) ──
+  //   ครึ่งเช้า = 08:00–12:00 · ครึ่งบ่าย = 13:00–17:00
+  //   คิดสายเฉพาะ "ครึ่งที่มาทำงานจริง" (ครึ่งที่ขาด/ลา ไม่คิดสาย)
+  HALF_AM_OUT_MIN: 12 * 60,   // ครึ่งเช้าเลิก 12:00 (ออกก่อน = หักเหมือนสาย)
+  HALF_PM_IN_MIN:  13 * 60,   // ครึ่งบ่ายเริ่ม 13:00 (เข้าหลัง = สาย)
 };
 
 // รายชื่อ emp_code ที่เป็นพนักงานประจำ (ได้ OT เช้า) — ที่เหลือ trial
@@ -142,6 +148,80 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date })
       const m = R.STD_OUT_MIN - co;
       lateMin += m;
       breakdown.push({ type: "late", label: `เลิกก่อน 17:00 (${m} น.)` });
+    }
+  }
+
+  return { lateMin, otHours, breakdown };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 calcHalfDay — คิดสาย/OT ของวัน "ครึ่งวัน"
+//   ใช้กับ ขาดงานครึ่งวัน / ลาป่วยครึ่งวัน / ลากิจครึ่งวัน
+//   หลักการ: คิดสายเฉพาะ "ครึ่งที่มาทำงานจริง" — ครึ่งที่ขาด/ลา ไม่คิดสาย
+//     • ครึ่งเช้า (มีเวลาในช่องเช้า) : เข้าหลัง 08:00 = สาย · ออกก่อน 12:00 = สาย
+//     • ครึ่งบ่าย (มีเวลาในช่องบ่าย) : เข้าหลัง 13:00 = สาย · ออกก่อน 17:00 = สาย
+//   ถ้ากรอกครบ 4 จุด = ทำงานเต็มวัน → ส่งต่อให้ calcDay คิดตามกฎเดิม
+//   ⚠️ กฎเดิม (calcDay) ใช้ช่อง "พักออก" เป็นเวลาพักเที่ยง จึงไม่เคยหักคนที่
+//      ออกก่อน 12:00 แล้วไม่กลับมาบ่าย — เคสดรีม 8 ส.ค.69 (ออก 11:46)
+// ════════════════════════════════════════════════════════════════
+export function calcHalfDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date }) {
+  const R = RULES;
+
+  const ci = timeToMins(checkIn);
+  const lo = timeToMins(lunchOut);
+  const li = timeToMins(lunchIn);
+  const co = timeToMins(checkOut);
+
+  // ครบ 4 จุด = มาทำงานเต็มวัน → ใช้กฎเดิม
+  if (ci !== null && lo !== null && li !== null && co !== null) {
+    return calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date });
+  }
+
+  const isPerm = PERMANENT_CODES.has(empCode);
+  let lateMin = 0, otHours = 0;
+  const breakdown = [];
+
+  // ── ครึ่งเช้า 08:00–12:00 ──
+  if (ci !== null || lo !== null) {
+    if (ci !== null) {
+      if (ci > R.STD_IN_MIN) {
+        const m = ci - R.STD_IN_MIN;
+        lateMin += m;
+        breakdown.push({ type: "late", label: `เข้าสาย ${m} น.` });
+      } else if (isPerm && ci >= R.OT_MORNING_EARLY_MIN && ci <= R.OT_MORNING_MID_MIN) {
+        otHours += 2;
+        breakdown.push({ type: "ot", label: "เข้าก่อน 06:30 → OT +2" });
+      } else if (isPerm && ci > R.OT_MORNING_MID_MIN && ci < R.OT_MORNING_LATE_MIN) {
+        otHours += 1;
+        breakdown.push({ type: "ot", label: "เข้าก่อน 07:00 → OT +1" });
+      }
+    }
+    if (lo !== null && lo < R.HALF_AM_OUT_MIN) {
+      const m = R.HALF_AM_OUT_MIN - lo;
+      lateMin += m;
+      breakdown.push({ type: "late", label: `เลิกก่อน 12:00 (${m} น.)` });
+    }
+  }
+
+  // ── ครึ่งบ่าย 13:00–17:00 ──
+  if (li !== null || co !== null) {
+    if (li !== null && li > R.HALF_PM_IN_MIN) {
+      const m = li - R.HALF_PM_IN_MIN;
+      lateMin += m;
+      breakdown.push({ type: "late", label: `เข้าบ่ายสาย ${m} น.` });
+    }
+    if (co !== null) {
+      if (co >= R.OT_EVENING_2_MIN) {
+        otHours += 2;
+        breakdown.push({ type: "ot", label: "เลิก ≥ 18:00 → OT +2" });
+      } else if (co >= R.OT_EVENING_1_MIN) {
+        otHours += 1;
+        breakdown.push({ type: "ot", label: "เลิก ≥ 17:30 → OT +1" });
+      } else if (co < R.STD_OUT_MIN) {
+        const m = R.STD_OUT_MIN - co;
+        lateMin += m;
+        breakdown.push({ type: "late", label: `เลิกก่อน 17:00 (${m} น.)` });
+      }
     }
   }
 

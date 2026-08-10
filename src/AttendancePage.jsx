@@ -1,6 +1,6 @@
 // src/AttendancePage.jsx
 import { useState, useEffect } from "react";
-import { parseZKTecoCSV, calcDay } from "./attendanceLogic";
+import { parseZKTecoCSV, calcDay, calcHalfDay } from "./attendanceLogic";
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtectedConflicts } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
@@ -43,8 +43,8 @@ const HR_NOTE_PRESETS = [
 // กลุ่มปุ่ม (เรียงเป็นแถว/คอลัมน์ให้อ่านง่าย — สีเดียวกัน = ผลต่อเงินเหมือนกัน)
 const PRESET_GROUPS = [
   { key: "paid",   title: "🟢 ลา–จ่ายเต็มวัน",  hint: "กดแล้วกดบันทึกได้เลย ไม่ต้องกรอกเวลา" },
-  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก" },
-  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง · ออกระหว่างวัน=ใส่ช่องหักเพิ่ม" },
+  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก (เช้า 08:00–12:00 · บ่าย 13:00–17:00 คิดสายให้)" },
+  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง + กรอกเวลาครึ่งที่มา (คิดสายให้) · ออกระหว่างวัน=ใส่ช่องหักเพิ่ม" },
   { key: "other",  title: "🟠 อื่นๆ",            hint: "" },
 ];
 
@@ -185,30 +185,37 @@ export default function AttendancePage({ role }) {
     const pm_out = to24h(editValues.scan_pm_out);
 
     const emp = employees.find(e => e.id === editRow.employee_id);
+
+    // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
+    const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
+    const isFullDayAbsence = !!fullDayNote;
+
+    // 🆕 ขาดงานครึ่งวัน → มาทำงานจริงครึ่งวัน กรอกเวลาครึ่งที่มา ระบบหักครึ่งค่าแรง + คิดสายครึ่งนั้นให้
+    const halfAbsentPreset = HR_NOTE_PRESETS.find(p => p.halfAbsent && p.value === editValues.hr_note);
+    const isHalfAbsent = !!halfAbsentPreset;
+
+    // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
+    //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
+    const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
+    const isHalfDayLeave = !!(leavePreset && leavePreset.half);
+
+    // ล้างเวลา (ไม่มาทำงานเลย) = เฉพาะ ลา/ขาด "ทั้งวัน" เท่านั้น
+    //   ⚠️ 10 ส.ค.69: เดิมล้างเวลาของ "ขาดงานครึ่งวัน" ด้วย → เวลาสแกนหาย + สาย=0
+    //      ครึ่งที่มาทำงานเลยไม่เคยถูกหักสาย (เคสดรีม 8 ส.ค. ออก 11:46 แทน 12:00)
+    const clearTimes = isFullDayAbsence;
+
+    // 🆕 วันครึ่งวันทุกชนิด → คิดสายเฉพาะครึ่งที่มาทำงาน (เช้า 08:00–12:00 · บ่าย 13:00–17:00)
+    const isHalfDayAny = isHalfAbsent || isHalfDayLeave;
     // 🆕 ส่ง date (work_date ของแถวนี้) เข้าไป → กฎเสาร์ทำงานตอนกดแก้ด้วย
-    const { lateMin, otHours } = calcDay({
+    const timeArgs = {
       checkIn: am_in || null,
       lunchOut: am_out || null,
       lunchIn: pm_in || null,
       checkOut: pm_out || null,
       empCode: emp?.emp_code || "",
       date: editRow.work_date,
-    });
-
-    // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
-    const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
-    const isFullDayAbsence = !!fullDayNote;
-
-    // 🆕 ขาดงานครึ่งวัน → ไม่มาทำงานครึ่งวัน กดปุ่มเดียวจบ (ล้างเวลา) ระบบหักครึ่งค่าแรงตอนคำนวณเงินเดือน
-    const halfAbsentPreset = HR_NOTE_PRESETS.find(p => p.halfAbsent && p.value === editValues.hr_note);
-    const isHalfAbsent = !!halfAbsentPreset;
-    // ล้างเวลา (ไม่มาทำงาน) สำหรับ ลา/ขาดทั้งวัน และ ขาดงานครึ่งวัน
-    const clearTimes = isFullDayAbsence || isHalfAbsent;
-
-    // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
-    //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
-    const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
-    const isHalfDayLeave = !!(leavePreset && leavePreset.half);
+    };
+    const { lateMin, otHours } = isHalfDayAny ? calcHalfDay(timeArgs) : calcDay(timeArgs);
 
     // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
     //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
@@ -305,9 +312,9 @@ export default function AttendancePage({ role }) {
       const doneText = isFullDayAbsence
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
         : isHalfAbsent
-        ? " — ขาดงานครึ่งวัน ปลด 🟡 แล้ว (หักครึ่งค่าแรงให้อัตโนมัติ)"
+        ? ` — ขาดงานครึ่งวัน ปลด 🟡 แล้ว (หักครึ่งค่าแรง${lateMin > 0 ? ` + สาย ${lateMin} น.` : " · ไม่มีสาย"})`
         : (isHalfDayLeave && isDone)
-        ? ` — ${editValues.hr_note} ปลด 🟡 แล้ว (จ่ายเต็มวัน · ลงหน้าการลาแล้ว)`
+        ? ` — ${editValues.hr_note} ปลด 🟡 แล้ว (จ่ายเต็มวัน · ลงหน้าการลาแล้ว${lateMin > 0 ? ` · สาย ${lateMin} น.` : ""})`
         : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
       setEditMsg({ type: "ok", text: "✅ บันทึกแล้ว" + doneText });
       setReviewLogs(prev => prev.filter(l => l.id !== editRow.id || !isDone));
