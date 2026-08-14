@@ -107,6 +107,7 @@ export default function AttendancePage({ role }) {
   const [editValues, setEditValues] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMsg, setEditMsg] = useState(null);
+  const [editBal, setEditBal] = useState(null);   // 🆕 โควตาลาคงเหลือของคนที่กำลังแก้ (null = ยังไม่รู้)
   const [reviewQuery, setReviewQuery] = useState("");    // 🔍 ค้นหารายการเวลา (ชื่อ/โน้ต)
   const [collapsedEmp, setCollapsedEmp] = useState({});  // พับกลุ่มตามพนักงาน
   const [histMonth, setHistMonth]     = useState(currentMonthKey());   // 📅 กรองเดือนคลังไฟล์
@@ -172,7 +173,44 @@ export default function AttendancePage({ role }) {
       hr_extra_note: log.hr_extra_note || "",
     });
     setEditMsg(null);
+    loadLeaveBalance(log);
   };
+
+  // 🆕 โหลดโควตาลาของคนนี้ (ปีของ "วันที่ทำงาน" ไม่ใช่ปีปัจจุบัน)
+  //    ⚠️ ถ้าวันนั้นเคยลงลาไว้แล้ว = สิทธิ์ถูกตัดไปแล้ว ต้องบวกคืนก่อน ไม่งั้นแก้ซ้ำวันเดิมไม่ได้
+  const loadLeaveBalance = async (log) => {
+    setEditBal(null);
+    const cy = Number(String(log.work_date).slice(0, 4)) || new Date().getFullYear();
+    const [balRes, existRes] = await Promise.all([
+      supabase.from("leave_balances").select("*")
+        .eq("employee_id", log.employee_id).eq("year", cy).maybeSingle(),
+      supabase.from("leave_requests").select("leave_type, hours")
+        .eq("employee_id", log.employee_id).eq("leave_date", log.work_date),
+    ]);
+    const bal = balRes.data;
+    const sickQuota     = bal ? Number(bal.sick_quota)     : 30;
+    const personalQuota = bal ? Number(bal.personal_quota) : 3;
+    let sickUsed        = bal ? Number(bal.sick_used)      : 0;
+    let personalUsed    = bal ? Number(bal.personal_used)  : 0;
+    for (const r of (existRes.data || [])) {
+      const d = r.hours ? 0.5 : 1;
+      if (r.leave_type === "sick") sickUsed -= d; else personalUsed -= d;
+    }
+    setEditBal({
+      year: cy, hasRow: !!bal, sickQuota, personalQuota,
+      sickRemain: sickQuota - sickUsed,
+      personalRemain: personalQuota - personalUsed,
+    });
+  };
+
+  // 🆕 ปุ่มลากดไม่ได้เมื่อโควตาคงเหลือไม่พอ
+  const leaveRemainOf = (leaveType) =>
+    !editBal ? null : (leaveType === "sick" ? editBal.sickRemain : editBal.personalRemain);
+  const presetBlocked = (p) => {
+    if (!p.leaveType || !editBal) return false;
+    return leaveRemainOf(p.leaveType) < (p.half ? 0.5 : 1);
+  };
+  const fmtDays = (n) => (Math.round(Number(n) * 100) / 100).toLocaleString("th-TH");
 
   const saveEdit = async () => {
     if (!editRow) return;
@@ -198,6 +236,19 @@ export default function AttendancePage({ role }) {
     //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
     const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
     const isHalfDayLeave = !!(leavePreset && leavePreset.half);
+
+    // 🆕 กันลาเกินสิทธิ์ — ด่านหลังสุด (ปุ่มถูกปิดแล้ว แต่ช่อง "พิมพ์เอง" ยังเขียนคำเดิมได้)
+    if (leavePreset && editBal) {
+      const need = leavePreset.half ? 0.5 : 1;
+      const remain = leaveRemainOf(leavePreset.leaveType);
+      if (remain < need) {
+        const tName = leavePreset.leaveType === "sick" ? "ลาป่วย" : "ลากิจ";
+        setEditMsg({ type: "error", text:
+          `❌ โควตา${tName}ไม่พอ — เหลือ ${fmtDays(remain)} วัน แต่ต้องใช้ ${need} วัน · ถ้าไม่มาทำงานให้เลือก “ขาดงาน” แทน` });
+        setSavingEdit(false);
+        return;
+      }
+    }
 
     // ล้างเวลา (ไม่มาทำงานเลย) = เฉพาะ ลา/ขาด "ทั้งวัน" เท่านั้น
     //   ⚠️ 10 ส.ค.69: เดิมล้างเวลาของ "ขาดงานครึ่งวัน" ด้วย → เวลาสแกนหาย + สาย=0
@@ -732,6 +783,23 @@ export default function AttendancePage({ role }) {
                   border:"1px solid #e2e8f0" }}>
                   💡 เลือกปุ่มตามกลุ่ม — สีเดียวกัน = ผลต่อเงินเหมือนกัน
                 </p>
+
+                {/* 🆕 โควตาลาคงเหลือ — โควตาไม่พอ = ปิดปุ่มลานั้น */}
+                {editBal && (
+                  <div style={{ margin:"0 0 6px", fontSize:11, padding:"5px 8px", borderRadius:6,
+                    border:`1px solid ${(editBal.sickRemain < 1 || editBal.personalRemain < 1) ? "#fca5a5" : "#bbf7d0"}`,
+                    background:(editBal.sickRemain < 1 || editBal.personalRemain < 1) ? "#fef2f2" : "#f0fdf4",
+                    color:"#334155" }}>
+                    📋 สิทธิ์ลาคงเหลือปี {editBal.year + 543}:{" "}
+                    🩺 ลาป่วย <strong>{fmtDays(editBal.sickRemain)}</strong> วัน ·{" "}
+                    🧾 ลากิจ <strong>{fmtDays(editBal.personalRemain)}</strong> วัน
+                    {(editBal.sickRemain < 1 || editBal.personalRemain < 1) && (
+                      <div style={{ marginTop:3, color:"#b91c1c", fontWeight:600 }}>
+                        ⚠️ โควตาไม่พอ — ปุ่มลาที่เกินสิทธิ์ถูกปิดไว้ · ถ้าไม่มาทำงานให้ใช้ 🔴 “ขาดงาน” แทน
+                      </div>
+                    )}
+                  </div>
+                )}
                 {PRESET_GROUPS.map(g => {
                   const items = HR_NOTE_PRESETS.filter(p => p.cat === g.key);
                   if (items.length === 0) return null;
@@ -752,15 +820,21 @@ export default function AttendancePage({ role }) {
                         gridTemplateColumns:"repeat(auto-fit, minmax(100px, 1fr))", gap:5 }}>
                         {items.map(p => {
                           const isActive = editValues.hr_note === p.value;
+                          const blocked = presetBlocked(p);   // 🆕 โควตาไม่พอ → กดไม่ได้
                           return (
                             <button key={p.value}
-                              onClick={() => setEditValues(prev => ({ ...prev, hr_note: p.value }))}
+                              disabled={blocked}
+                              title={blocked
+                                ? `โควตา${p.leaveType === "sick" ? "ลาป่วย" : "ลากิจ"}ไม่พอ (เหลือ ${fmtDays(leaveRemainOf(p.leaveType))} วัน)`
+                                : undefined}
+                              onClick={() => { if (blocked) return; setEditValues(prev => ({ ...prev, hr_note: p.value })); }}
                               style={{
                                 ...s.presetBtn, textAlign:"center", borderRadius:10,
                                 ...catStyle[0],
                                 ...(isActive ? catStyle[1] : {}),
+                                ...(blocked ? { opacity:0.4, filter:"grayscale(1)", cursor:"not-allowed" } : {}),
                               }}>
-                              {p.deliveryDuty ? "🚚 " : icon}{p.label}
+                              {blocked ? "🚫 " : (p.deliveryDuty ? "🚚 " : icon)}{p.label}
                             </button>
                           );
                         })}
