@@ -92,6 +92,27 @@ export function isSaturday(dateStr) {
 //   🆕 ถ้า date เป็นวันเสาร์ → คิดเฉพาะสายเช้า ข้ามเที่ยง+เย็นทั้งหมด
 //      (จุดเรียก เช่น AttendancePage ต้องส่ง date ของวันนั้นเข้ามาด้วย)
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// 🆕 29 ส.ค.69 — OT เย็น (เจ้าของเคาะ)
+//   เดิม: 17:30 = 1 · 18:00 = 2 แล้ว **ตันที่ 2 ตลอดกาล**
+//         → คนกลับ 22:00 ได้เท่าคนกลับ 18:00 (เคสจ๋า+แป๋ง 28 ส.ค. กลับ 19:40 ได้แค่ 2)
+//   ใหม่: 17:30–17:59 = 1 (คงของเดิม ไม่มีใครเสียสิทธิ์)
+//         ตั้งแต่ 18:00 = (เวลาที่เกิน 17:00 ปัดลงครึ่งชั่วโมง) + 1
+//           18:00 → 1.0+1 = 2   (เท่าเดิม)
+//           18:30 → 1.5+1 = 2.5
+//           19:00 → 2.0+1 = 3
+//           19:40 → 2.5+1 = 3.5  ← ยอดที่เจ้าของเคาะไว้
+//           20:00 → 3.0+1 = 4
+//           21:00 → 4.0+1 = 5
+//   🔑 หน่วย OT = เท่าของค่าแรงรายชั่วโมงปกติ ไม่ใช่จำนวนชั่วโมงที่อยู่จริง
+function eveningOtHours(co) {
+  const R = RULES;
+  if (co === null || co < R.OT_EVENING_1_MIN) return 0;
+  if (co < R.OT_EVENING_2_MIN) return 1;                 // 17:30–17:59
+  const over = (co - R.STD_OUT_MIN) / 60;                // ชม.ที่เกิน 17:00
+  return Math.floor(over * 2) / 2 + 1;                   // ปัดลงครึ่งชั่วโมง + 1
+}
+
 export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date }) {
   const R = RULES;
   const isPerm = PERMANENT_CODES.has(empCode);
@@ -138,12 +159,10 @@ export function calcDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, date })
 
   // ── เย็น ── (วันธรรมดา)
   if (co !== null) {
-    if (co >= R.OT_EVENING_2_MIN) {
-      otHours += 2;
-      breakdown.push({ type: "ot", label: "เลิก ≥ 18:00 → OT +2" });
-    } else if (co >= R.OT_EVENING_1_MIN) {
-      otHours += 1;
-      breakdown.push({ type: "ot", label: "เลิก ≥ 17:30 → OT +1" });
+    const _evOt = eveningOtHours(co);
+    if (_evOt > 0) {
+      otHours += _evOt;
+      breakdown.push({ type: "ot", label: `เลิกงานเย็น → OT +${_evOt}` });
     } else if (co < R.STD_OUT_MIN) {
       const m = R.STD_OUT_MIN - co;
       lateMin += m;
@@ -211,12 +230,10 @@ export function calcHalfDay({ checkIn, lunchOut, lunchIn, checkOut, empCode, dat
       breakdown.push({ type: "late", label: `เข้าบ่ายสาย ${m} น.` });
     }
     if (co !== null) {
-      if (co >= R.OT_EVENING_2_MIN) {
-        otHours += 2;
-        breakdown.push({ type: "ot", label: "เลิก ≥ 18:00 → OT +2" });
-      } else if (co >= R.OT_EVENING_1_MIN) {
-        otHours += 1;
-        breakdown.push({ type: "ot", label: "เลิก ≥ 17:30 → OT +1" });
+      const _evOt = eveningOtHours(co);
+      if (_evOt > 0) {
+        otHours += _evOt;
+        breakdown.push({ type: "ot", label: `เลิกงานเย็น → OT +${_evOt}` });
       } else if (co < R.STD_OUT_MIN) {
         const m = R.STD_OUT_MIN - co;
         lateMin += m;
