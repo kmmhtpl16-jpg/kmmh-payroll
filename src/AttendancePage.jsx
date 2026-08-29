@@ -218,11 +218,26 @@ export default function AttendancePage({ role }) {
     setEditMsg(null);
 
     const am_in = to24h(editValues.scan_am_in);
-    const am_out = to24h(editValues.scan_am_out);
+    let am_out = to24h(editValues.scan_am_out);
     const pm_in = to24h(editValues.scan_pm_in);
-    const pm_out = to24h(editValues.scan_pm_out);
+    let pm_out = to24h(editValues.scan_pm_out);
 
     const emp = employees.find(e => e.id === editRow.employee_id);
+
+    // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
+    //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
+    const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
+
+    // 🆕 29 ส.ค.69 — วันติดส่งสินค้าที่สแกน 2 ครั้ง (เช้าเข้าร้าน → กลับเข้าร้านตอนเย็น)
+    //   เครื่องเรียงสแกนตามลำดับ จึงยัดสแกนที่ 2 ลงช่อง "พักออก" → ช่อง "ออกเย็น" ว่าง
+    //   → calcDay ไม่เห็นเวลาเลิกงาน = ไม่ได้ OT ทั้งที่กลับถึงร้าน 19:40 (เคสจ๋า+แป๋ง 28 ส.ค.69)
+    //   แก้: ติดส่งสินค้า + มีแค่ 2 จุดของช่องเช้า + สแกนที่ 2 อยู่ช่วงบ่าย (≥ 13:00)
+    //        → ย้ายไปช่อง "ออกเย็น" ให้เอง แล้วปล่อยให้ calcDay คิด OT/สายตามกฎปกติ
+    //   ⚠️ ไม่แตะเคสที่ HR กรอกครบ 4 จุดเอง และไม่แตะสแกนพักเที่ยงจริง (< 13:00)
+    if (isDeliveryDuty && am_out && !pm_in && !pm_out && am_out >= "13:00") {
+      pm_out = am_out;
+      am_out = "";
+    }
 
     // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
     const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
@@ -268,9 +283,6 @@ export default function AttendancePage({ role }) {
     };
     const { lateMin, otHours } = isHalfDayAny ? calcHalfDay(timeArgs) : calcDay(timeArgs);
 
-    // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
-    //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
-    const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
     // 🔵 ทำงาน 1 วัน ไม่เอา OT/สาย → HR อนุมัติว่าเป็นวันทำงานปกติ (คงเวลาสแกน แต่ล้าง สาย/OT เป็น 0)
     const isNormalNoOt = !!HR_NOTE_PRESETS.find(p => p.noOt && p.value === editValues.hr_note);
     // 🆕 v7.10 ออกระหว่างวัน → ไม่คิด "ออกก่อน 17:00" เป็นสาย (payrollCalc คิดค่าแรงตามชั่วโมงให้แล้ว)
