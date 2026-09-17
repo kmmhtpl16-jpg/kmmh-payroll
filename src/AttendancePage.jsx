@@ -77,6 +77,11 @@ const PRESET_GROUPS = [
 ];
 
 function processAttendance(rows, employees) {
+  // 🆕 17 ก.ย. 69 เรียงตามพนักงาน (ชื่อเล่น) แล้วตามวันที่ — เจ้าของขอให้ดูทีละคนจนครบ แล้วค่อยคนถัดไป
+  const byEmpThenDate = (a, b) =>
+    String(a.nickname || "").localeCompare(String(b.nickname || ""), "th") ||
+    String(a.emp_code || "").localeCompare(String(b.emp_code || "")) ||
+    String(a.work_date || "").localeCompare(String(b.work_date || ""));
   return rows.map((r) => {
     const emp = employees.find((e) => e.emp_code === r.empCode);
     // 🆕 ส่ง date เข้าไปด้วย → calcDay รู้ว่าวันไหนเป็นเสาร์ (คิดเฉพาะสายเช้า)
@@ -100,7 +105,7 @@ function processAttendance(rows, employees) {
       needs_hr_review: r.needsReview || !emp,
       hr_note: !emp ? `ไม่พบพนักงาน emp_code=${r.empCode}` : (r.reason || null),
     };
-  });
+  }).sort(byEmpThenDate);
 }
 
 // ✅ แปลง "HH:mm" ให้แน่ใจว่าเป็น 24 ชม. เสมอ
