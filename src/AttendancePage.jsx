@@ -1,6 +1,6 @@
 // src/AttendancePage.jsx
 import { useState, useEffect } from "react";
-import { parseZKTecoCSV, calcDay, calcHalfDay } from "./attendanceLogic";
+import { parseZKTecoCSV, punchesToRows, calcDay, calcHalfDay } from "./attendanceLogic";
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtectedConflicts } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
@@ -17,6 +17,34 @@ function currentMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
+
+// ── 🆕 ปุ่ม "📡 ดึงจากเครื่องสแกน" (16 ก.ย. 69) — ตัวช่วยวันที่ (เวลาไทยเสมอ) ──
+function thTodayISO() {
+  // วันที่ตามเวลาไทย ไม่ขึ้นกับ timezone ของเครื่องที่เปิด
+  return new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+}
+function addDaysISO(iso, n) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function datesBetween(from, to) {
+  const out = [];
+  for (let d = from; d <= to && out.length < 63; d = addDaysISO(d, 1)) out.push(d);
+  return out;
+}
+// "สแกนตรง 15-16กย69" — ใช้เป็นชื่อในคลังไฟล์
+function scanImportName(from, to) {
+  const lbl = (iso) => {
+    const [y, m, d] = iso.split("-");
+    return { d: Number(d), m: TH_MONTHS[Number(m)].replace(/\./g, ""), y: String(Number(y) + 543).slice(2) };
+  };
+  const a = lbl(from), b = lbl(to);
+  if (from === to) return `สแกนตรง ${a.d}${a.m}${a.y}`;
+  if (a.m === b.m && a.y === b.y) return `สแกนตรง ${a.d}-${b.d}${b.m}${b.y}`;
+  return `สแกนตรง ${a.d}${a.m}${a.y}-${b.d}${b.m}${b.y}`;
+}
+const dayLabelTH = (iso) => { const [, m, d] = iso.split("-"); return `${Number(d)} ${TH_MONTHS[Number(m)]}`; };
 
 // ── ปุ่ม preset หมายเหตุ HR ──
 // fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
@@ -100,6 +128,13 @@ export default function AttendancePage({ role }) {
   // 🆕 v4 [device map] ตารางจับคู่เลขเครื่องสแกนนิ้ว → รหัสพนักงาน (อ่านจาก DB: device_user_map)
   const [deviceMap, setDeviceMap] = useState({});
   const [skippedRows, setSkippedRows] = useState([]); // แถวในไฟล์ที่ไม่รู้จักเลขเครื่อง → เคยถูกข้ามเงียบๆ
+  // 🆕 ดึงจากเครื่องสแกน
+  const [scanFrom, setScanFrom] = useState("");
+  const [scanTo, setScanTo] = useState("");
+  const [scanDatesTouched, setScanDatesTouched] = useState(false);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanSync, setScanSync] = useState(null);   // app_config.scanner_last_sync
+  const [scanMsg, setScanMsg] = useState(null);     // { kind: "warn"|"error"|"info", text }
 
   const [reviewLogs, setReviewLogs] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
@@ -113,7 +148,73 @@ export default function AttendancePage({ role }) {
   const [histMonth, setHistMonth]     = useState(currentMonthKey());   // 📅 กรองเดือนคลังไฟล์
   const [reviewMonth, setReviewMonth] = useState(currentMonthKey());   // 📅 กรองเดือนแก้ไขย้อนหลัง
 
-  useEffect(() => { loadEmployees(); loadDeviceMap(); loadHistory(); }, []);
+  useEffect(() => { loadEmployees(); loadDeviceMap(); loadHistory(); loadScanSync(); }, []);
+
+  // 🆕 ค่าเริ่มต้นช่องวันที่ = วันถัดจากที่นำเข้าล่าสุด → เมื่อวาน (ถ้านำเข้าถึงเมื่อวานแล้ว = วันนี้)
+  useEffect(() => {
+    if (scanDatesTouched) return;
+    const today = thTodayISO();
+    const yesterday = addDaysISO(today, -1);
+    const lastTo = imports.map((i) => i.date_to).filter(Boolean).sort().pop();
+    let from = lastTo ? addDaysISO(lastTo, 1) : yesterday;
+    if (from < addDaysISO(today, -31)) from = addDaysISO(today, -31);
+    let to = yesterday;
+    if (from > to) { from = today; to = today; }
+    setScanFrom(from); setScanTo(to);
+  }, [imports, scanDatesTouched]);
+
+  // 🆕 เวลาที่เครื่องแม่ส่งข้อมูลเข้ามาล่าสุด (เรียก RPC ช่วงวันเดียว เบาๆ)
+  const loadScanSync = async () => {
+    const today = thTodayISO();
+    const { data, error } = await supabase.rpc("get_scanner_punches", { p_from: today, p_to: today });
+    if (!error && data) setScanSync(data.last_sync || null);
+  };
+
+  // 🆕 กดดึงจากเครื่องสแกน → แปลงเป็นแถวแบบเดียวกับ CSV → ใช้เส้นทางตรวจ/บันทึกเดิมทั้งหมด
+  const handlePullScanner = async () => {
+    setSaveResult(null); setScanMsg(null);
+    if (!scanFrom || !scanTo || scanTo < scanFrom) {
+      setScanMsg({ kind: "error", text: "เลือกวันที่ให้ถูกต้อง (วันเริ่มต้องไม่หลังวันสุดท้าย)" });
+      return;
+    }
+    const dates = datesBetween(scanFrom, scanTo);
+    if (dates.length > 31) {
+      setScanMsg({ kind: "error", text: "ดึงได้ครั้งละไม่เกิน 31 วัน" });
+      return;
+    }
+    setScanLoading(true);
+    try {
+      const { data, error } = await supabase.rpc("get_scanner_punches", { p_from: scanFrom, p_to: scanTo });
+      if (error) throw error;
+      setScanSync(data?.last_sync || null);
+      const activeCodes = new Set(employees.map((e) => e.emp_code));
+      const { rows, skipped, sundays } = punchesToRows(data?.punches || [], deviceMap, dates, activeCodes);
+      setSkippedRows(skipped);
+      setFileName(scanImportName(scanFrom, scanTo));
+      setProcessed(processAttendance(rows, employees));
+
+      const notes = [];
+      const today = thTodayISO();
+      if (scanTo >= today) {
+        notes.push(`วันนี้ (${dayLabelTH(today)}) ยังไม่ครบวัน — เวลาที่ยังไม่ได้สแกนจะว่าง` +
+          (new Date(today + "T00:00:00Z").getUTCDay() === 6 ? " · วันเสาร์: ดึงเต็มวันซ้ำอีกครั้งหลังเลิกงาน" : " · ถ้าดึงวันนี้ ให้ดึงซ้ำอีกครั้งหลังเลิกงาน"));
+      }
+      // วันที่ไม่มีใครสแกนเลยทั้งร้าน = ร้านปิด หรือเครื่องแม่ยังไม่ได้ส่งข้อมูลวันนั้น → เตือนให้เห็นชัด
+      const hasPunch = new Set(rows.filter((r) => r.checkIn || r.lunchOut || r.lunchIn || r.checkOut).map((r) => r.date));
+      const emptyDays = [...new Set(rows.map((r) => r.date))].filter((d) => !hasPunch.has(d));
+      if (emptyDays.length > 0) {
+        notes.push(`${emptyDays.map(dayLabelTH).join(", ")} ไม่มีใครสแกนเลยทั้งร้าน — ถ้าร้านไม่ได้ปิด แปลว่าเครื่องแม่ยังไม่ได้ส่งข้อมูลวันนั้น อย่าเพิ่งบันทึก`);
+      }
+      if (sundays > 0) notes.push(`มีคนสแกนวันอาทิตย์ ${sundays} คน-วัน — ไม่ได้นำเข้า (เหมือนไฟล์ CSV)`);
+      if (rows.length === 0) notes.push("ไม่พบเวลาสแกนในช่วงวันที่เลือก");
+      if (notes.length) setScanMsg({ kind: "warn", text: notes.join("\n") });
+    } catch (e) {
+      console.error(e);
+      setScanMsg({ kind: "error", text: "ดึงข้อมูลไม่สำเร็จ: " + (e.message || e) });
+    } finally {
+      setScanLoading(false);
+    }
+  };
 
   // 🆕 v4 [device map] อ่านตารางจับคู่จากฐานข้อมูล → { "19": "K019", ... }
   //     เพิ่มพนักงานใหม่ = เพิ่มแถวใน device_user_map ก็พอ ไม่ต้องแก้โค้ด
@@ -389,6 +490,7 @@ export default function AttendancePage({ role }) {
   const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    setScanMsg(null);
     setFileName(file.name);
     setSaveResult(null);
     const text = await file.text();
@@ -515,6 +617,48 @@ export default function AttendancePage({ role }) {
       {/* ══ UPLOAD ══ */}
       {activeSection === "upload" && (
         <div style={s.section}>
+          {/* 🆕 📡 ดึงจากเครื่องสแกน — ข้อมูลเดียวกับ CSV แต่ไม่ต้อง export จาก ZKTime.Net */}
+          {(() => {
+            const recv = scanSync?.received_at_th ? new Date(scanSync.received_at_th.replace(" ", "T") + "+07:00") : null;
+            const ageMin = recv ? Math.round((Date.now() - recv.getTime()) / 60000) : null;
+            const stale = ageMin === null || ageMin > 30;
+            return (
+              <div style={s.scanBox}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+                  <span style={{ fontSize:22 }}>📡</span>
+                  <span style={{ fontSize:14, color:"#065f46", fontWeight:700 }}>ดึงจากเครื่องสแกน</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <span style={{ fontSize:13, color:"#374151" }}>วันที่</span>
+                  <input type="date" value={scanFrom} max={thTodayISO()}
+                    onChange={(e) => { setScanDatesTouched(true); setScanFrom(e.target.value); if (!scanTo || e.target.value > scanTo) setScanTo(e.target.value); }}
+                    style={s.scanDate} />
+                  <span style={{ fontSize:13, color:"#374151" }}>ถึง</span>
+                  <input type="date" value={scanTo} min={scanFrom} max={thTodayISO()}
+                    onChange={(e) => { setScanDatesTouched(true); setScanTo(e.target.value); }}
+                    style={s.scanDate} />
+                  <button onClick={handlePullScanner} disabled={scanLoading}
+                    style={{ ...s.scanBtn, opacity: scanLoading ? 0.6 : 1 }}>
+                    {scanLoading ? "⏳ กำลังดึง..." : "ดึงข้อมูล"}
+                  </button>
+                </div>
+                <p style={{ margin:"8px 0 0", fontSize:12, color: stale ? "#b45309" : "#047857" }}>
+                  {recv
+                    ? `ข้อมูลส่งเข้ามาล่าสุด ${dayLabelTH(scanSync.received_at_th.slice(0,10))} ${scanSync.received_at_th.slice(11,16)} น.` +
+                      (stale ? " ⚠️ นานกว่า 30 นาที — เครื่องแม่อาจปิดอยู่ เวลาสแกนล่าสุดอาจยังไม่เข้า" : " ✅")
+                    : "ยังอ่านสถานะการส่งข้อมูลไม่ได้"}
+                  {scanSync?.scanner_error ? ` · ❌ ต่อเครื่องสแกนไม่ได้: ${scanSync.scanner_error}` : ""}
+                </p>
+                {scanMsg && (
+                  <p style={{ margin:"8px 0 0", fontSize:13, whiteSpace:"pre-line", fontWeight:600,
+                    color: scanMsg.kind === "error" ? "#991b1b" : "#92400e" }}>
+                    {scanMsg.kind === "error" ? "❌ " : "⚠️ "}{scanMsg.text}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
           <label style={s.uploadZone}>
             <input type="file" accept=".csv,.txt" onChange={handleFile} style={{ display:"none" }} />
             <span style={{ fontSize:28 }}>📂</span>
@@ -945,6 +1089,9 @@ const s = {
     background:"#fff", cursor:"pointer", fontWeight:600, fontSize:14, color:"#64748b" },
   secTabActive: { background:"#2563eb", color:"#fff", borderColor:"#2563eb" },
   section: { background:"#fff", borderRadius:12, padding:16, boxShadow:"0 1px 4px rgba(0,0,0,0.08)" },
+  scanBox: { border:"2px solid #6ee7b7", borderRadius:12, padding:"14px 16px", background:"#ecfdf5", marginBottom:12 },
+  scanDate: { padding:"6px 8px", borderRadius:8, border:"1px solid #cbd5e1", fontSize:14 },
+  scanBtn: { padding:"8px 18px", borderRadius:8, background:"#059669", color:"#fff", border:"none", fontWeight:700, fontSize:14, cursor:"pointer" },
   uploadZone: { display:"flex", alignItems:"center", gap:12, border:"2px dashed #93c5fd",
     borderRadius:12, padding:"20px 16px", cursor:"pointer", background:"#eff6ff", marginBottom:12 },
   summaryBar: { display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 },

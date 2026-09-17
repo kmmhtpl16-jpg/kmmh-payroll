@@ -76,7 +76,7 @@ export async function saveAttendanceToSupabase(
   const todayBKK = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
   const isTodayUnfinished = (r) =>
     r.work_date === todayBKK &&
-    /ยังไม่สแกนออก|มีแค่เข้าเช้า/.test(r.hr_note || "");
+    /ยังไม่สแกนออก|มีแค่เข้าเช้า|ไม่ครบ 4 จุด/.test(r.hr_note || "");
   const hasRealErrors = rows.some((r) => r.needs_hr_review && !isTodayUnfinished(r));
 
   const { data: importData, error: importErr } = await supabase

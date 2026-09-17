@@ -418,3 +418,94 @@ export function parseZKTecoCSV(text, dbMap) {
 
   return { rows, skipped };
 }
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 punchesToRows — แปลงเวลาสแกนดิบ (attendance_punches) → rows แบบเดียวกับ parseZKTecoCSV
+//   ใช้กับปุ่ม "📡 ดึงจากเครื่องสแกน" แทนการเลือกไฟล์ CSV (16 ก.ย. 69)
+//
+//   punches   = [[device_uid, "YYYY-MM-DD HH:MM:SS"], ...]  (จาก RPC get_scanner_punches)
+//   dbMap     = { device_uid: emp_code }  (device_user_map)
+//   dates     = ["YYYY-MM-DD", ...] วันที่เลือก
+//   activeCodes = Set(emp_code) ของพนักงานที่ยังทำงาน → ใส่แถว "ไม่สแกนเลย" ให้เหมือน CSV
+//
+//   กติกา (เทียบกับ CSV จริง มิ.ย.–ก.ย. 69 ตรงทุกแถวที่ไฟล์ดึงหลังเลิกงาน):
+//   • ข้ามเลขเครื่องที่ไม่มีใน map (4 = PC ของเยสโมลดิ้ง · 18 = ผู้ดูแลเครื่อง) → skipped
+//   • กดซ้ำห่างจากครั้งก่อน ≤ 2 นาที = ครั้งเดียว (เคส 20 ส.ค. ห่าง 73 วิ ZKTime.Net นับครั้งเดียว)
+//   • ตัดวินาทีทิ้ง (07:39:38 → 07:39) เหมือน ZKTime.Net
+//   • 4 ครั้ง → ins=[เข้าเช้า, กลับพัก] outs=[ออกพัก, เลิกงาน] ป้อน assignPunches ตัวเดิม
+//   • วันเสาร์ → assignPunches ตัวเดิม (มีแต่เช้า = คิดสายเช้า · ครบ 4 = คิดบ่ายด้วย)
+//   • วันธรรมดาไม่ครบ 4 ครั้ง → วางตามช่วงเวลา + ขึ้น "ต้องตรวจ" ให้ HR จัดเอง
+//   • วันอาทิตย์ → ไม่นำเข้า (CSV ไม่มีวันอาทิตย์) นับไว้ใน sundays
+// ════════════════════════════════════════════════════════════════
+export const PUNCH_MERGE_SEC = 120;
+// เลขในเครื่องที่ไม่ใช่พนักงานร้าน — ข้ามเงียบๆ ไม่ต้องขึ้นกล่องเตือนแดงทุกครั้ง
+//   4 = "PC YES" (เอ PC ของเยสโมลดิ้ง) · 18 = Lhing ผู้ดูแลเครื่อง
+export const SCANNER_IGNORE_UIDS = new Set(["4", "18"]);
+
+export function punchesToRows(punches, dbMap, dates, activeCodes) {
+  const MAP = { ...DEVICE_MAP, ...(dbMap || {}) };
+  const byKey = {};            // "uid|date" → [Date-sec...]
+  const skippedCount = {};     // uid → count
+  let sundays = 0;
+  const dateSet = new Set(dates || []);
+
+  for (const [uidRaw, ts] of punches || []) {
+    const uid = String(uidRaw).trim();
+    const date = String(ts).slice(0, 10);
+    if (!dateSet.has(date)) continue;
+    if (SCANNER_IGNORE_UIDS.has(uid)) continue;
+    if (!MAP[uid]) { skippedCount[uid] = (skippedCount[uid] || 0) + 1; continue; }
+    const hh = +ts.slice(11, 13), mi = +ts.slice(14, 16), ss = +ts.slice(17, 19);
+    (byKey[`${uid}|${date}`] ||= []).push(hh * 3600 + mi * 60 + ss);
+  }
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const toHHMM = (sec) => `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}`;
+
+  const rows = [];
+  const uids = Object.keys(MAP).sort((a, b) => Number(a) - Number(b));
+  for (const date of [...dateSet].sort()) {
+    const isSun = new Date(date).getDay() === 0;
+    for (const uid of uids) {
+      const empCode = MAP[uid];
+      const secs = (byKey[`${uid}|${date}`] || []).sort((a, b) => a - b);
+      if (isSun) { if (secs.length) sundays++; continue; }
+      if (!secs.length && !(activeCodes && activeCodes.has(empCode))) continue;
+
+      // รวมกดซ้ำ: ห่างจากสแกนก่อนหน้า ≤ 2 นาที = ครั้งเดียว (เก็บครั้งแรก)
+      const kept = [];
+      let prev = null;
+      for (const s of secs) {
+        if (prev === null || s - prev > PUNCH_MERGE_SEC) kept.push(s);
+        prev = s;
+      }
+      const pts = [...new Set(kept.map(toHHMM))];
+      const sat = isSaturday(date);
+
+      let res;
+      if (pts.length === 4) {
+        res = assignPunches([pts[0], pts[2]], [pts[1], pts[3]], sat);
+      } else if (sat || pts.length === 0 || pts.length >= 5) {
+        res = assignPunches(pts, [], sat);   // เสาร์/ไม่สแกน/5+ ครั้ง ใช้ตรรกะเดิม (เรียงเวลาเอง)
+      } else {
+        // วันธรรมดา 1–3 ครั้ง → วางตามช่วงเวลา ให้ HR ตรวจ
+        res = { checkIn: null, lunchOut: null, lunchIn: null, checkOut: null, needsReview: true, reason: "" };
+        const mids = [];
+        for (const t of pts) {
+          const m = timeToMins(t);
+          if (m < 10 * 60 && !res.checkIn) res.checkIn = t;
+          else if (m >= 15 * 60 && !res.checkOut) res.checkOut = t;
+          else mids.push(t);
+        }
+        if (mids[0]) res.lunchOut = mids[0];
+        if (mids[1]) res.lunchIn = mids[1];
+        res.reason = `สแกน ${pts.length} ครั้ง (${pts.join(", ")}) — ไม่ครบ 4 จุด กรุณาตรวจ`;
+      }
+
+      rows.push({ date, deviceUid: uid, deviceName: "", empCode, ...res });
+    }
+  }
+
+  const skipped = Object.entries(skippedCount).map(([devUid, count]) => ({ devUid, devName: "—", count }));
+  return { rows, skipped, sundays };
+}
