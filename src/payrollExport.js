@@ -134,7 +134,8 @@ export async function exportPayrollExcel(payrollResult, yearBE, month) {
     .forEach(r => {
       ws3Data.push([
         r.nickname, r.full_name, "ประจำ",
-        parseFloat(r.base_wage.toFixed(2)),
+        // 🔧 v7.12 — ฐาน ปกส. จริงของเดือนนั้น (ลาออก/เข้าประจำกลางเดือน ฐานไม่เท่าเงินเดือนเต็ม)
+        parseFloat(Number(r.ss_base != null ? r.ss_base : r.base_wage).toFixed(2)),
         parseFloat(r.social_security.toFixed(2)),
         parseFloat(r.social_security.toFixed(2)),
         parseFloat((r.social_security * 2).toFixed(2)),
