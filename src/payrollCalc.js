@@ -1,7 +1,14 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.11
+// คำนวณเงินเดือน KMMH — v7.12
 // Logic ตาม KMMH_payroll_logic_v2.md
+//
+// 🔧 v7.12 เปลี่ยนจาก v7.11:
+//   • [ปกส.] ลาออกระหว่างเดือน → ฐาน ปกส. = ค่าจ้างที่ได้รับจริง (ค่าแรงวันทำงาน + ค่าวันอาทิตย์)
+//     เดิมใช้ monthly_salary เต็มเดือนเสมอ → หักเกิน (เคสพี K017 ออก 17 ก.ย.69: 475 → 190)
+//   • [ปกส.] เข้าประจำกลางเดือน → บวก holiday_wage เข้าฐานด้วย (ของค้างจาก v7.11)
+//   • [ปกส.] เพิ่มฐานขั้นต่ำ 1,650 บาท/เดือน ตามกฎ ปกส. (ค่าจ้าง 0 = ไม่ส่ง)
+//   • ส่งค่า ss_base ออกมากับผลลัพธ์ → ใบ ปกส./ไฟล์ Excel โชว์ฐานตรงกับยอดที่หักจริง
 //
 // 🔧 v7.11 เปลี่ยนจาก v7.10:
 //   • [เบี้ยขยัน] เลิกใช้ /ลา|ขาด/ ลอยๆ กับ hr_note — โน้ตอัตโนมัติของระบบมีคำว่า
@@ -193,10 +200,15 @@ function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
   return 500;
 }
 
-// ปกส. 5% cap 875
+// ปกส. 5% — ฐานขั้นต่ำ 1,650 บาท/เดือน, เพดานส่ง 875 บาท
+// 🔧 v7.12 เพิ่มฐานขั้นต่ำ 1,650 ตามกฎ ปกส.
+//   มีผลเฉพาะเดือนที่ค่าจ้างจริงต่ำกว่า 1,650 (เข้า/ออกต้นเดือน) — คนปกติไม่กระทบ
+//   ค่าจ้าง 0 (ไม่ได้ทำงานเลย) → ไม่มีเงินสมทบ
 function calcSocialSecurity(empType, base) {
   if (empType !== "permanent") return 0;
-  return Math.min(parseFloat((base * 0.05).toFixed(2)), 875);
+  const b = Number(base) || 0;
+  if (b <= 0) return 0;
+  return Math.min(parseFloat((Math.max(b, 1650) * 0.05).toFixed(2)), 875);
 }
 
 // 🔧 v7 — map insurance_level ให้ตรง enum จริงใน DB ('none'/'200'/'500')
@@ -425,8 +437,15 @@ export async function calcPayroll(year, month) {
     const app_fee_deduct = (isFirstMonth && emp.app_fee_status === "none") ? 100 : 0;
     const app_fee_refund = (isResigningThisMonth && emp.app_fee_status === "held") ? 100 : 0;
 
-    // ปกส. — ใช้ monthly_salary เป็นฐาน
-    const ss_base         = permStartInMonth ? perm_base : (emp.monthly_salary || base_wage);
+    // ปกส. — ฐาน = "ค่าจ้างที่ได้รับจริงในเดือนนั้น"
+    // 🔧 v7.12 ลาออกระหว่างเดือน → ฐาน = ค่าแรงวันที่ทำจริง + ค่าวันอาทิตย์ที่ได้
+    //   เดิมใช้ monthly_salary เต็มเดือน → ปกส. สูงเกินจริง
+    //   (เคสพี K017 ลาออก 17 ก.ย.69: ฐาน 9,500 → ปกส. 475 ทั้งที่ได้ค่าจ้างจริง 3,800 → ต้องเป็น 190)
+    // 🔧 v7.12 เข้าประจำกลางเดือน → บวก holiday_wage เข้าฐานด้วย (ค้างมาจาก v7.11)
+    const ss_wage_actual  = parseFloat((perm_base + holiday_wage).toFixed(2));
+    const ss_base         = (permStartInMonth || isResigningThisMonth)
+      ? ss_wage_actual
+      : (emp.monthly_salary || base_wage);
     const social_security = calcSocialSecurity(emp.emp_type, ss_base);
 
     // 🔧 v7.6 — ประกันงาน: เดือนที่ลาออก "ไม่หัก" (ไม่ฝากเข้ากระปุก)
@@ -478,6 +497,7 @@ export async function calcPayroll(year, month) {
       full_name:         emp.full_name,
       emp_type:          emp.emp_type,
       monthly_salary:    emp.monthly_salary || null,
+      ss_base,                                  // 🔧 v7.12 — ฐานที่ใช้คิด ปกส. จริงของเดือนนั้น
       insurance_level:   emp.insurance_level,   // 🔧 v7 — ส่งต่อให้ savePayroll ใช้ sync deposit
       resigned_date:     resignDate || null,     // 🔧 v7.2 — ใช้เป็น entry_date ของ refund ประกัน
       daily_rate,
