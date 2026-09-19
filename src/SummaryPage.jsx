@@ -11,9 +11,11 @@ const MONTHS_TH = ["","มกราคม","กุมภาพันธ์","ม
 
 const fmt = (n) => Number(n || 0).toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// เงินเดือนฐานที่ใช้คิด ปกส. (ฐานที่จดทะเบียน)
+// เงินเดือนฐานที่ใช้คิด ปกส. (ฐานที่ส่งจริงของเดือนนั้น)
+// 🔧 v7.12 — ใช้ ss_base จาก payrollCalc ก่อน (เดือนที่เข้า/ออกกลางเดือนฐานไม่เท่าเงินเดือนเต็ม)
 const ssBase = (r) =>
-  r.monthly_salary != null ? r.monthly_salary
+  r.ss_base != null ? r.ss_base
+  : r.monthly_salary != null ? r.monthly_salary
   : (r.social_security > 0 ? Math.round(r.social_security / 0.05) : r.base_wage);
 
 export default function SummaryPage({ role }) {
