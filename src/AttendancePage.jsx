@@ -4,6 +4,9 @@ import { parseZKTecoCSV, punchesToRows, calcDay, calcHalfDay } from "./attendanc
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtectedConflicts } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
+// 🆕 22 ก.ย.69 ระบบ "ขอแก้ไข" — HR ขอ → เจ้าของอนุมัติ → ระบบแก้ให้ (ไม่ต้องแก้หลังบ้านอีก)
+import { EditRequestModal, EditRequestBar } from "./EditRequestPanel";
+import { HR_NOTE_PRESETS, PRESET_GROUPS } from "./hrNotePresets";
 
 // ── ตัวช่วยเรื่องเดือน (แสดงเฉพาะเดือนที่เลือก) ──
 const TH_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -46,35 +49,7 @@ function scanImportName(from, to) {
 }
 const dayLabelTH = (iso) => { const [, m, d] = iso.split("-"); return `${Number(d)} ${TH_MONTHS[Number(m)]}`; };
 
-// ── ปุ่ม preset หมายเหตุ HR ──
-// fullDay: true = ไม่มาทำงานทั้งวัน (ลา/ขาด/วันหยุด) → กดแล้วบันทึกจบ ไม่ต้องกรอกเวลา
-// fullDay: false = ยังมาทำงานจริง (ครึ่งวัน/ออกระหว่างวัน) → ต้องกรอกเวลาตามจริง
-const HR_NOTE_PRESETS = [
-  // 🟢 จ่ายเต็มวัน — กดแล้วบันทึกได้เลย ไม่ต้องกรอกเวลา
-  { label: "ลาป่วย", value: "ลาป่วย", fullDay: true, leaveType: "sick", cat: "paid" },
-  { label: "ลากิจ", value: "ลากิจ", fullDay: true, leaveType: "personal", cat: "paid" },
-  { label: "วันหยุด", value: "วันหยุดบริษัท", fullDay: true, cat: "paid" },
-  // 🔵 ลาครึ่งวัน — กรอกครึ่งที่มาทำงาน แล้วบันทึก
-  { label: "ลาป่วยครึ่งวัน", value: "ลาป่วยครึ่งวัน", fullDay: false, leaveType: "sick", half: true, cat: "half" },
-  { label: "ลากิจครึ่งวัน", value: "ลากิจครึ่งวัน", fullDay: false, leaveType: "personal", half: true, cat: "half" },
-  // 🔴 หักเงิน
-  { label: "ขาดงาน", value: "ขาดงาน", fullDay: true, cat: "deduct" },
-  { label: "ขาดงานครึ่งวัน", value: "ขาดงานครึ่งวัน", halfAbsent: true, cat: "deduct" },
-  { label: "ออกระหว่างวัน", value: "ออกระหว่างวัน", fullDay: false, cat: "deduct" },
-  // 🟠 อื่นๆ
-  { label: "แจ้งสายล่วงหน้า", value: "แจ้งล่วงหน้า", fullDay: false, cat: "other" },
-  { label: "ติดส่งสินค้า", value: "ติดส่งสินค้า", fullDay: false, deliveryDuty: true, cat: "other" },
-  // 🔵 มาเช้า-กลับเช้า/เลื่อนกะทั้งวัน ทำครบวัน แต่ไม่อนุมัติ OT → คงเวลาสแกน บังคับ สาย=0 OT=0
-  { label: "ทำงาน 1 วัน ไม่เอา OT/สาย", value: "ทำงาน 1 วัน (ไม่เอา OT/สาย)", fullDay: false, noOt: true, cat: "other" },
-];
-
-// กลุ่มปุ่ม (เรียงเป็นแถว/คอลัมน์ให้อ่านง่าย — สีเดียวกัน = ผลต่อเงินเหมือนกัน)
-const PRESET_GROUPS = [
-  { key: "paid",   title: "🟢 ลา–จ่ายเต็มวัน",  hint: "กดแล้วกดบันทึกได้เลย ไม่ต้องกรอกเวลา" },
-  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก (เช้า 08:00–12:00 · บ่าย 13:00–17:00 คิดสายให้)" },
-  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง + กรอกเวลาครึ่งที่มา (คิดสายให้) · ออกระหว่างวัน=ใส่ช่องหักเพิ่ม" },
-  { key: "other",  title: "🟠 อื่นๆ",            hint: "" },
-];
+// ── ปุ่ม preset หมายเหตุ HR + กลุ่มปุ่ม ย้ายไป src/hrNotePresets.js แล้ว (ใช้ร่วมกับฟอร์ม "ขอแก้ไข") ──
 
 function processAttendance(rows, employees) {
   // 🆕 17 ก.ย. 69 เรียงตามพนักงาน (ชื่อเล่น) แล้วตามวันที่ — เจ้าของขอให้ดูทีละคนจนครบ แล้วค่อยคนถัดไป
@@ -148,6 +123,8 @@ export default function AttendancePage({ role }) {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMsg, setEditMsg] = useState(null);
   const [editBal, setEditBal] = useState(null);   // 🆕 โควตาลาคงเหลือของคนที่กำลังแก้ (null = ยังไม่รู้)
+  const [reqRow, setReqRow] = useState(null);     // 🆕 แถวที่กำลังกด "ขอแก้ไข"
+  const [reqKey, setReqKey] = useState(0);        // 🆕 นับรอบ refresh แถบคำขอ
   const [reviewQuery, setReviewQuery] = useState("");    // 🔍 ค้นหารายการเวลา (ชื่อ/โน้ต)
   const [collapsedEmp, setCollapsedEmp] = useState({});  // พับกลุ่มตามพนักงาน
   const [histMonth, setHistMonth]     = useState(currentMonthKey());   // 📅 กรองเดือนคลังไฟล์
@@ -239,8 +216,10 @@ export default function AttendancePage({ role }) {
   };
 
   const loadEmployees = async () => {
+    // 🆕 ดึงฐานค่าแรงมาด้วย → ใช้คำนวณ "ผลกระทบต่อเงิน" ให้เจ้าของดูก่อนอนุมัติคำขอแก้ไข
     const { data } = await supabase
-      .from("employees").select("id, emp_code, nickname, full_name")
+      .from("employees")
+      .select("id, emp_code, nickname, full_name, emp_type, monthly_salary, daily_rate, probation")
       .eq("is_active", true).order("emp_code");
     if (data) setEmployees(data);
   };
@@ -267,7 +246,8 @@ export default function AttendancePage({ role }) {
 
   const openEdit = (log) => {
     // 🆕 #1.1 รายการที่แก้ไปแล้ว = ล็อก เปิดแก้ซ้ำไม่ได้
-    if (!log.needs_hr_review && log.hr_edited_at) return;
+    //   ⚠️ 22 ก.ย.69 เจ้าของปลดล็อกเองได้ (HR ต้องยื่น "ขอแก้ไข" ให้เจ้าของอนุมัติแทน)
+    if (!log.needs_hr_review && log.hr_edited_at && role !== "owner") return;
     setEditRow(log);
     setEditValues({
       scan_am_in: log.scan_am_in || "",
@@ -429,6 +409,20 @@ export default function AttendancePage({ role }) {
     } else {
       // 🆕 #1.2 ลาป่วย/ลากิจ (เต็ม/ครึ่ง) → บันทึกลงหน้า "การลา" + ตัดสิทธิ์
       let leaveSyncErr = null;
+      // 🔑 22 ก.ย.69 โน้ตเปลี่ยน = ต้องถอนใบลาเดิมของวันนั้น + คืนสิทธิ์ก่อนเสมอ
+      //   เดิมไม่มีขั้นนี้ → แก้ "ลาป่วย → ขาดงาน" แล้วสิทธิ์ลายังถูกตัดค้างอยู่ ต้องมาแก้หลังบ้านทุกครั้ง
+      const noteChanged = (editRow.hr_note || "") !== (editValues.hr_note || "");
+      if (noteChanged) {
+        const { error: revErr } = await supabase.rpc("revert_leave_of_day", {
+          p_employee_id: editRow.employee_id,
+          p_date: editRow.work_date,
+        });
+        if (revErr) {
+          setEditMsg({ type: "error", text: "⚠️ บันทึกเวลาแล้ว แต่คืนสิทธิ์ลาเดิมไม่สำเร็จ: " + revErr.message + " — อย่าเพิ่งปิด แจ้งผู้ดูแลก่อน" });
+          setSavingEdit(false);
+          return;
+        }
+      }
       if (leavePreset && isDone) {
         try {
           // ⚠️ ใช้ปีของ "วันที่ทำงาน" ไม่ใช่ปีปัจจุบัน (ถ้าย้อนแก้ข้ามปีจะเข้าโควตาผิดปี)
@@ -609,6 +603,12 @@ export default function AttendancePage({ role }) {
 
   return (
     <div style={s.page}>
+      {/* 🆕 22 ก.ย.69 คำขอแก้ไขที่รออนุมัติ — เจ้าของกดอนุมัติได้จากตรงนี้เลย */}
+      <EditRequestBar
+        role={role}
+        refreshKey={reqKey}
+        onApplied={() => { loadReviewLogs(); }}
+      />
       <div style={s.sectionTabs}>
         {SECTIONS.map(sec => (
           <button key={sec.id}
@@ -817,7 +817,17 @@ export default function AttendancePage({ role }) {
                             </span>
                           )}
                         </div>
-                        {locked ? <span style={s.lockedTag}>✏️ แก้ไขแล้ว 🔒</span> : <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>}
+                        {/* 🆕 22 ก.ย.69 แถวที่ล็อกแล้ว: HR ยื่น "ขอแก้ไข" · เจ้าของปลดล็อกแก้ได้เลย */}
+                        {locked ? (
+                          <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <span style={s.lockedTag}>✏️ แก้ไขแล้ว 🔒</span>
+                            {role === "owner"
+                              ? <button onClick={() => openEdit(log)} style={s.unlockBtn}>🔓 แก้เลย</button>
+                              : <button onClick={() => setReqRow(log)} style={s.reqBtn}>📨 ขอแก้ไข</button>}
+                          </span>
+                        ) : (
+                          <button onClick={() => openEdit(log)} style={s.editBtn}>✏️ แก้ไข</button>
+                        )}
                       </div>
                       <div style={{ display:"flex", gap:16, marginTop:8, fontSize:13 }}>
                         {[["เข้าเช้า", log.scan_am_in], ["พักออก", log.scan_am_out],
@@ -1075,6 +1085,17 @@ export default function AttendancePage({ role }) {
         </div>
       )}
 
+      {/* ══ MODAL ขอแก้ไข (HR) ══ */}
+      {reqRow && (
+        <EditRequestModal
+          log={reqRow}
+          emp={employees.find(e => e.id === reqRow.employee_id)}
+          role={role}
+          onClose={() => setReqRow(null)}
+          onSent={() => setReqKey(k => k + 1)}
+        />
+      )}
+
       {/* ══ MODAL เตือนทับข้อมูลสำคัญ (import guard) ══ */}
       <ImportConflictModal
         rows={conflictRows}
@@ -1126,6 +1147,11 @@ const s = {
   reviewCardLocked: { border:"1.5px solid #bbf7d0", background:"#f0fdf4" }, reviewCardClean: { border:"1.5px solid #e2e8f0", background:"#fff" },
   lockedTag: { padding:"6px 12px", borderRadius:8, background:"#dcfce7",
     color:"#166534", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
+  // 🆕 ปุ่มบนแถวที่ล็อก
+  reqBtn: { padding:"6px 12px", borderRadius:8, border:"1.5px solid #fcd34d", background:"#fffbeb",
+    color:"#92400e", cursor:"pointer", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
+  unlockBtn: { padding:"6px 12px", borderRadius:8, border:"1.5px solid #bfdbfe", background:"#eff6ff",
+    color:"#1d4ed8", cursor:"pointer", fontWeight:700, fontSize:12, whiteSpace:"nowrap" },
   importCard: { display:"flex", alignItems:"flex-start", gap:12,
     padding:"12px 14px", borderRadius:10, border:"1px solid #e2e8f0", marginBottom:8 },
   monthBar:      { display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", background:"#f8fafc", padding:"8px 12px", borderRadius:10, border:"1px solid #e2e8f0", marginBottom:12 },
