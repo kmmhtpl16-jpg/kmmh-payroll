@@ -45,7 +45,20 @@ function trialProgress(startIso) {
   return { dayCount, remaining, dueIso }
 }
 
+// 🆕 25 ก.ย.69 ตำแหน่งงาน (employees.job_roles) → โปรแกรมที่ควรอยู่
+//   หลัก "โปรแกรมตรวจ ไม่ทำแทน": ระบบเสนอ HR กดยืนยันเอง · ยังไม่ส่ง = ป้ายส้มค้างไว้
+const ROLE_OPTS = [
+  { key: 'front', label: 'หน้าร้าน/บริการ' },
+  { key: 'sales', label: 'ฝ่ายขาย' },
+  { key: 'driver', label: 'คนขับรถ' },
+  { key: 'warehouse', label: 'คลังสินค้า' },
+]
+const ROLE_LABEL = Object.fromEntries(ROLE_OPTS.map(r => [r.key, r.label]))
+const PROG_LABEL = { eval_front: 'ประเมินหน้าร้าน', svc100: 'ประเมิน KPI', eval_sales: 'ประเมินฝ่ายขาย' }
+const PROG_KEYS = ['eval_front', 'svc100', 'eval_sales']
+
 const EMPTY_FORM = {
+  job_roles: [],
   emp_code: '', nickname: '', full_name: '',
   emp_type: 'trial', monthly_salary: '', daily_rate: '',
   position_allowance: '0', pay_schedule: 'saturday',
@@ -77,7 +90,61 @@ export default function EmployeesPage() {
   const [evalRoster, setEvalRoster] = useState({})   // { [emp_code]: row }
   const [evalBusy, setEvalBusy] = useState(null)     // emp_code ที่กำลังบันทึก
 
-  useEffect(() => { fetchEmployees(); fetchEvalRoster() }, [])
+  // 🆕 สถานะโปรแกรมตามตำแหน่ง (RPC emp_program_status)
+  const [progStatus, setProgStatus] = useState({})   // { [emp_id]: row }
+  const [progOrphans, setProgOrphans] = useState([])
+  const [enrollModal, setEnrollModal] = useState(null) // { emp_id, isNew }
+  const [enrollPick, setEnrollPick] = useState({})     // { [prog]: true } ที่ติ๊ก
+  const [enrollBusy, setEnrollBusy] = useState(false)
+
+  useEffect(() => { fetchEmployees(); fetchEvalRoster(); fetchProgStatus() }, [])
+
+  async function fetchProgStatus() {
+    const { data, error } = await supabase.rpc('emp_program_status')
+    if (error || !data) return null
+    const map = {}
+    for (const r of (data.rows || [])) map[r.emp_id] = r
+    setProgStatus(map)
+    setProgOrphans(data.orphans || [])
+    return map
+  }
+
+  const progIssues = (st) => st ? PROG_KEYS.filter(k => st.programs?.[k] === 'missing' || st.programs?.[k] === 'extra') : []
+
+  // เปิดกล่องยืนยัน — ติ๊กให้เฉพาะ "ยังไม่ได้ส่ง" (นำออกต้องติ๊กเอง)
+  function openEnroll(empId, map, isNew = false) {
+    const st = (map || progStatus)[empId]
+    if (!st) return
+    const pick = {}
+    for (const k of PROG_KEYS) if (st.programs?.[k] === 'missing') pick[k] = true
+    setEnrollPick(pick)
+    setEnrollModal({ emp_id: empId, isNew })
+  }
+
+  async function confirmEnroll() {
+    const st = progStatus[enrollModal.emp_id]
+    if (!st) return
+    const add = PROG_KEYS.filter(k => enrollPick[k] && st.programs[k] === 'missing')
+    const del = PROG_KEYS.filter(k => enrollPick[k] && st.programs[k] === 'extra')
+    if (del.includes('svc100') && st.door_queue === 'in' &&
+        !window.confirm(`นำ ${st.nickname} ออกจากประเมิน KPI จะถอดออกจากคิวเวรเปิดประตูด้วย (ระบบจัดเวรตั้งแต่พรุ่งนี้ใหม่) ยืนยันไหม?`)) return
+    setEnrollBusy(true)
+    const msgs = []
+    if (add.length) {
+      const { data, error } = await supabase.rpc('emp_enroll_programs', { p_emp: st.emp_id, p_targets: add })
+      if (error || !data?.ok) { setEnrollBusy(false); showToast('ส่งไม่สำเร็จ: ' + (error?.message || data?.error), 'error'); return }
+      msgs.push('ส่งเข้า ' + add.map(k => PROG_LABEL[k]).join(', '))
+    }
+    for (const k of del) {
+      const { data, error } = await supabase.rpc('emp_unenroll_program', { p_emp: st.emp_id, p_target: k })
+      if (error || !data?.ok) { setEnrollBusy(false); showToast('นำออกไม่สำเร็จ: ' + (error?.message || data?.error), 'error'); return }
+      msgs.push('นำออกจาก ' + PROG_LABEL[k] + (data.removed_from_queue ? ' (+คิวเวร)' : ''))
+    }
+    setEnrollBusy(false)
+    setEnrollModal(null)
+    if (msgs.length) showToast(`${st.nickname}: ${msgs.join(' · ')} ✓`)
+    fetchProgStatus(); fetchEvalRoster()
+  }
 
   // 🆕 ออโต้เติม "ค่าแรงวัน" สำหรับพนักงานประจำ = เงินเดือน ÷ วันในเดือนปัจจุบัน
   //    (พนักงานประจำไม่ต้องกรอกค่าแรงวันเอง — ระบบคำนวณให้จากเงินเดือน)
@@ -182,6 +249,7 @@ export default function EmployeesPage() {
       setEditId(emp.id)
       setEditIsActive(emp.is_active)   // 🆕 จำสถานะเดิมไว้
       setForm({
+        job_roles: Array.isArray(emp.job_roles) ? emp.job_roles : [],
         emp_code: emp.emp_code || '',
         nickname: emp.nickname || '',
         full_name: emp.full_name || '',
@@ -230,6 +298,7 @@ export default function EmployeesPage() {
     }
     setSaving(true)
     const payload = {
+      job_roles: form.job_roles || [],
       emp_code: form.emp_code || null,
       nickname: form.nickname,
       full_name: form.full_name,
@@ -247,17 +316,23 @@ export default function EmployeesPage() {
       //    แก้: ตอนแก้ไข ใช้สถานะเดิม / ตอนเพิ่มใหม่ = true
       is_active: editId ? editIsActive : true,
     }
-    let error
+    let error, savedId = editId
     if (editId) {
       ({ error } = await supabase.from('employees').update(payload).eq('id', editId))
     } else {
-      ({ error } = await supabase.from('employees').insert(payload))
+      let row
+      ({ data: row, error } = await supabase.from('employees').insert(payload).select('id').single())
+      savedId = row?.id
     }
     setSaving(false)
     if (error) { showToast('บันทึกไม่ได้: ' + error.message, 'error'); return }
     showToast(editId ? 'แก้ไขข้อมูลสำเร็จ ✓' : 'เพิ่มพนักงานสำเร็จ ✓')
+    const wasNew = !editId
     closeModal()
     fetchEmployees()
+    // 🆕 ตำแหน่งไม่ตรงกับโปรแกรม → เด้งกล่องให้ HR ยืนยันเอง (ระบบไม่ส่งให้เอง)
+    const map = await fetchProgStatus()
+    if (map && savedId && payload.is_active && progIssues(map[savedId]).length) openEnroll(savedId, map, wasNew)
   }
 
   // 🆕 เปิด popup ลาออก + โหลดยอดประกันสด
@@ -380,6 +455,32 @@ export default function EmployeesPage() {
         </select>
       </div>
 
+      {/* 🆕 ตรวจรายชื่อโปรแกรมเทียบตำแหน่ง */}
+      {(() => {
+        const bad = Object.values(progStatus).filter(st => progIssues(st).length)
+        if (!bad.length && !progOrphans.length) return null
+        return (
+          <div style={{ background: '#FBF3E6', border: '0.5px solid #E8C98C', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 12, color: '#7A5418', lineHeight: 1.6 }}>
+            {bad.length > 0 && (
+              <div>
+                ⚠️ <b>รายชื่อในโปรแกรมยังไม่ตรงกับตำแหน่ง {bad.length} คน:</b>{' '}
+                {bad.map((st, i) => (
+                  <span key={st.emp_id}>{i > 0 && ' · '}
+                    <button onClick={() => openEnroll(st.emp_id)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#7A5418', textDecoration: 'underline', fontSize: 12 }}>{st.nickname}</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {progOrphans.length > 0 && (
+              <div>
+                ℹ️ ชื่อในโปรแกรมที่ไม่ผูกกับพนักงานใน payroll:{' '}
+                {progOrphans.map(o => `${o.name} (${PROG_LABEL[o.program]}${o.emp_code ? ' · ' + o.emp_code : ' · ไม่มีรหัส'})`).join(', ')}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
       {/* Table */}
       <div style={{ border: '0.5px solid #e5e5e5', borderRadius: 10, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -414,6 +515,32 @@ export default function EmployeesPage() {
                             <span style={{ color: '#A32D2D', marginLeft: 6 }}>· ออก {toBE(e.resigned_date)}</span>
                           )}
                         </div>
+                        {/* 🆕 ตำแหน่ง + สถานะโปรแกรม */}
+                        {e.is_active && (() => {
+                          const st = progStatus[e.id]
+                          const roles = Array.isArray(e.job_roles) ? e.job_roles : []
+                          const issues = progIssues(st)
+                          return (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                              {roles.length === 0 && <span style={{ fontSize: 10.5, color: '#aaa' }}>ยังไม่ระบุตำแหน่ง</span>}
+                              {roles.map(r => (
+                                <span key={r} style={{ background: '#F1EFE8', color: '#555', padding: '1px 7px', borderRadius: 99, fontSize: 10.5 }}>{ROLE_LABEL[r] || r}</span>
+                              ))}
+                              {st && issues.map(k => (
+                                <button key={k} onClick={() => openEnroll(e.id)}
+                                  style={{ background: st.programs[k] === 'missing' ? '#FBF3E6' : '#FCEBEB', color: st.programs[k] === 'missing' ? '#B26A00' : '#A32D2D', border: 'none', padding: '1px 7px', borderRadius: 99, fontSize: 10.5, cursor: 'pointer', fontWeight: 600 }}>
+                                  {st.programs[k] === 'missing' ? `ยังไม่ส่ง: ${PROG_LABEL[k]}` : `ตำแหน่งไม่ใช่แล้ว: ${PROG_LABEL[k]}`}
+                                </button>
+                              ))}
+                              {st && st.door_queue === 'not_in' && (
+                                <span title="ลำดับคิว HR จัดเองที่หน้าเวรเปิดประตู" style={{ background: '#FBF3E6', color: '#B26A00', padding: '1px 7px', borderRadius: 99, fontSize: 10.5 }}>ยังไม่อยู่ในคิวเวรเปิดประตู</span>
+                              )}
+                              {st && !st.scanner && (
+                                <span style={{ background: '#FBF3E6', color: '#B26A00', padding: '1px 7px', borderRadius: 99, fontSize: 10.5 }}>ยังไม่ผูกเครื่องสแกนนิ้ว</span>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                   </td>
@@ -534,6 +661,23 @@ export default function EmployeesPage() {
                     style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
                 </div>
               ))}
+
+              {/* 🆕 ตำแหน่งงาน → ใช้เสนอว่าควรส่งเข้าโปรแกรมไหน */}
+              <div style={{ gridColumn: '1/-1' }}>
+                <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>ตำแหน่งงาน (เลือกได้หลายอัน)</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                  {ROLE_OPTS.map(r => (
+                    <label key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={(form.job_roles || []).includes(r.key)}
+                        onChange={ev => setF('job_roles', ev.target.checked
+                          ? [...(form.job_roles || []), r.key]
+                          : (form.job_roles || []).filter(x => x !== r.key))} />
+                      {r.label}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10.5, color: '#999', marginTop: 3 }}>บันทึกแล้วระบบจะถามว่าจะส่งเข้าโปรแกรมไหน — ไม่ส่งให้เอง</div>
+              </div>
 
               <div style={{ gridColumn: '1/-1', borderTop: '0.5px solid #eee', paddingTop: 10, fontSize: 11, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>ประเภทและค่าแรง</div>
 
@@ -664,6 +808,61 @@ export default function EmployeesPage() {
           </div>
         </div>
       )}
+
+      {/* ═══ 🆕 Modal ส่งเข้าโปรแกรมตามตำแหน่ง ═══ */}
+      {enrollModal && progStatus[enrollModal.emp_id] && (() => {
+        const st = progStatus[enrollModal.emp_id]
+        const rows = PROG_KEYS.filter(k => st.programs[k] !== 'none')
+        const nPick = rows.filter(k => enrollPick[k] && st.programs[k] !== 'ok').length
+        return (
+          <div onClick={ev => ev.target === ev.currentTarget && !enrollBusy && setEnrollModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 110 }}>
+            <div style={{ background: '#fff', borderRadius: 12, padding: '1.5rem', width: '100%', maxWidth: 460 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <span style={{ fontWeight: 600, fontSize: 16 }}>ส่งเข้าโปรแกรมตามตำแหน่ง</span>
+                <button onClick={() => setEnrollModal(null)} disabled={enrollBusy} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#aaa' }}>×</button>
+              </div>
+              <div style={{ background: '#F7F7F5', borderRadius: 8, padding: '10px 14px', marginBottom: 14 }}>
+                <div style={{ fontWeight: 600 }}>{st.nickname} <span style={{ color: '#888', fontWeight: 400 }}>· {st.emp_code || 'ไม่มีรหัส'}</span></div>
+                <div style={{ fontSize: 12, color: '#666' }}>ตำแหน่ง: {(st.roles || []).map(r => ROLE_LABEL[r] || r).join(', ') || '— ยังไม่ระบุ —'}</div>
+              </div>
+              {!st.emp_code && (
+                <div style={{ background: '#FCEBEB', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#A32D2D' }}>ต้องใส่รหัสพนักงานก่อน (กดแก้ไข → รหัสพนักงาน)</div>
+              )}
+              {rows.length === 0 && <div style={{ fontSize: 13, color: '#888', marginBottom: 12 }}>ตำแหน่งนี้ไม่มีโปรแกรมที่ต้องส่งชื่อ</div>}
+              {rows.map(k => {
+                const s = st.programs[k]
+                return (
+                  <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '0.5px solid #f0f0f0', fontSize: 13, cursor: s === 'ok' ? 'default' : 'pointer' }}>
+                    <input type="checkbox" disabled={s === 'ok' || !st.emp_code} checked={s === 'ok' || !!enrollPick[k]}
+                      onChange={ev => setEnrollPick(p => ({ ...p, [k]: ev.target.checked }))} />
+                    <span style={{ flex: 1 }}>{s === 'extra' ? 'นำออกจาก ' : ''}{PROG_LABEL[k]}</span>
+                    <span style={{ fontSize: 11, color: s === 'ok' ? '#27500A' : s === 'missing' ? '#B26A00' : '#A32D2D' }}>
+                      {s === 'ok' ? '✓ อยู่แล้ว' : s === 'missing' ? 'ยังไม่ได้ส่ง' : 'ตำแหน่งไม่ใช่แล้ว (ประวัติไม่หาย)'}
+                    </span>
+                  </label>
+                )
+              })}
+              {(st.programs.svc100 !== 'none' || st.door_queue === 'in') && (
+                <div style={{ fontSize: 12, color: '#555', marginTop: 10, lineHeight: 1.5 }}>
+                  🔑 คิวเวรเปิดประตู: {st.door_queue === 'in' ? 'อยู่ในคิวแล้ว' : 'ยังไม่อยู่ — ลำดับคิว HR จัดเองที่หน้าเวรเปิดประตู (ต้องอยู่ในประเมิน KPI ก่อน)'}
+                </div>
+              )}
+              {!st.scanner && (
+                <div style={{ fontSize: 12, color: '#B26A00', marginTop: 6 }}>🖐 ยังไม่ผูกเลขเครื่องสแกนนิ้ว — เพิ่มที่ตารางจับคู่เครื่องสแกน</div>
+              )}
+              {enrollModal.isNew && st.programs.eval_front === 'missing' && (
+                <div style={{ fontSize: 11, color: '#888', marginTop: 6 }}>ทดลองงาน = ร่วมประเมินได้ แต่ยังไม่นับโบนัส (ปรับประจำแล้วระบบเปิดให้เอง)</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+                <button onClick={() => setEnrollModal(null)} disabled={enrollBusy} style={{ height: 36, padding: '0 16px', borderRadius: 8, border: '0.5px solid #ccc', background: 'none', cursor: 'pointer', fontSize: 14 }}>ไว้ทีหลัง</button>
+                <button onClick={confirmEnroll} disabled={enrollBusy || nPick === 0 || !st.emp_code} style={{ height: 36, padding: '0 20px', borderRadius: 8, border: 'none', background: '#111', color: '#fff', cursor: 'pointer', fontWeight: 500, fontSize: 14, opacity: (enrollBusy || nPick === 0 || !st.emp_code) ? 0.5 : 1 }}>
+                  {enrollBusy ? 'กำลังบันทึก...' : `ยืนยัน (${nPick})`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ═══ 🆕 Modal ลาออก ═══ */}
       {resignModal && (
