@@ -106,7 +106,7 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
   const resignedRecent = employees.filter(e => !e.is_active && e.resigned_date &&
     (Date.now() - new Date(e.resigned_date).getTime()) / 86400000 <= SETTLE_WINDOW_DAYS)
   const resignedKey = resignedRecent.map(e => e.id).join(',')
-  async function fetchSettle() { setSettleMap(await loadResignVouchers(resignedRecent.map(e => e.id))) }
+  async function fetchSettle() { setSettleMap(await loadResignVouchers(resignedRecent.map(e => e.id), resignedRecent)) }
   useEffect(() => { fetchSettle() }, [resignedKey])
 
   // 🆕 25ก.ย.69 มาจากกล่องแดงหน้าบันทึกเวลา → เปิดฟอร์มเพิ่มพนักงานพร้อมเลขเครื่อง/วันเริ่มใช้

@@ -15,11 +15,14 @@ const STATUS = {
   submitted: { text: "⏳ รออนุมัติ", bg: "#FEF3C7", fg: "#92400E" },
   approved:  { text: "✓ เคลียแล้ว", bg: "#EAF3DE", fg: "#27500A" },
   returned:  { text: "↩️ ถูกตีกลับ", bg: "#FCEBEB", fg: "#A32D2D" },
+  month_end: { text: "✓ เคลียกับใบสิ้นเดือนแล้ว", bg: "#EAF3DE", fg: "#27500A" },
 };
 export const SETTLE_WINDOW_DAYS = 90;   // ดูคนที่ลาออกภายใน 90 วัน
 
 // โหลดสถานะเคลียเงินของคนลาออก → { [employee_id]: voucher | null }
-export async function loadResignVouchers(empIds) {
+//   🆕 คนที่ออกก่อนมีระบบใบเคลีย (เช่น ดรีม ส.ค.69) และถูกเคลียไปกับ "ใบสิ้นเดือนที่อนุมัติแล้ว" ของเดือนที่ลาออก
+//      = ถือว่าเคลียแล้ว (status 'month_end') ไม่ต้องทำใบเคลียซ้ำ — ต้องส่ง emps (มี resigned_date) มาด้วย
+export async function loadResignVouchers(empIds, emps = []) {
   if (!empIds.length) return {};
   const { data } = await supabase.from("payout_vouchers")
     .select("id, voucher_no, status, total_amount, cycle_date, pay_method, pay_note, employee_id, return_reason, period_id, lines")
@@ -29,6 +32,21 @@ export async function loadResignVouchers(empIds) {
   for (const v of data || []) {
     // คนเดียวอาจมีหลายงวด (กลับมาทำแล้วออกใหม่) → เอาใบล่าสุด
     if (!m[v.employee_id] || String(v.cycle_date) > String(m[v.employee_id].cycle_date)) m[v.employee_id] = v;
+  }
+  const noV = emps.filter((e) => empIds.includes(e.id) && !m[e.id] && e.resigned_date);
+  if (noV.length) {
+    const { data: me } = await supabase.from("payout_vouchers")
+      .select("voucher_no, status, lines, approved_at, pay_periods(year, month)")
+      .eq("kind", "cycle").is("cycle_date", null).eq("status", "approved");
+    for (const e of noV) {
+      const [y, mo] = String(e.resigned_date).slice(0, 10).split("-").map(Number);
+      const v = (me || []).find((x) => x.pay_periods?.year === y && x.pay_periods?.month === mo &&
+        (x.lines || []).some((l) => l.employee_id === e.id));
+      if (v) {
+        const ln = v.lines.find((l) => l.employee_id === e.id);
+        m[e.id] = { status: "month_end", voucher_no: v.voucher_no, total_amount: Number(ln.to_pay || 0), cycle_date: String(v.approved_at || "").slice(0, 10) || null };
+      }
+    }
   }
   return m;
 }
@@ -68,7 +86,7 @@ export function ResignSettleChip({ emp, voucher, onOpen }) {
   return (
     <button onClick={() => onOpen(emp)}
       style={{ marginTop: 4, background: st ? st.bg : "#FCEBEB", color: st ? st.fg : "#A32D2D", border: "none", borderRadius: 99, padding: "1px 8px", fontSize: 10.5, fontWeight: 600, cursor: "pointer" }}>
-      💼 {voucher ? `${st.text} ${money(voucher.total_amount)} · ${toBE(voucher.cycle_date)}` : "ยังไม่เคลียเงินลาออก"}
+      💼 {voucher ? (voucher.status === "month_end" ? `${st.text} ${voucher.voucher_no} (${money(voucher.total_amount)})` : `${st.text} ${money(voucher.total_amount)} · ${toBE(voucher.cycle_date)}`) : "ยังไม่เคลียเงินลาออก"}
     </button>
   );
 }
@@ -233,9 +251,14 @@ export function ResignSettleModal({ emp, role, onClose, onDone }) {
               </div>
             </div>
 
-            {ctx.meLine && (
+            {ctx.meLine && ctx.meVoucher.status === "approved" && (
+              <div style={{ background: "#EAF3DE", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12.5, color: "#27500A", fontWeight: 600 }}>
+                ✓ เคลียไปกับใบจ่ายสิ้นเดือน {ctx.meVoucher.voucher_no} (อนุมัติแล้ว) ยอด {money(ctx.meLine.to_pay)} — ไม่ต้องทำใบเคลียเงินซ้ำ
+              </div>
+            )}
+            {ctx.meLine && ctx.meVoucher.status !== "approved" && (
               <div style={{ background: "#FCEBEB", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#A32D2D" }}>
-                ⚠️ ใบจ่ายสิ้นเดือน {ctx.meVoucher.voucher_no} มียอดของคนนี้อยู่แล้ว {money(ctx.meLine.to_pay)} — ถ้าจ่ายไปกับใบนั้นแล้ว ไม่ต้องทำใบเคลียเงิน
+                ⚠️ ใบจ่ายสิ้นเดือน {ctx.meVoucher.voucher_no} มียอดของคนนี้อยู่แล้ว {money(ctx.meLine.to_pay)} (ยังไม่อนุมัติ) — ถ้าจะจ่ายไปกับใบนั้น ไม่ต้องทำใบเคลียเงิน
               </div>
             )}
 
@@ -272,7 +295,7 @@ export function ResignSettleModal({ emp, role, onClose, onDone }) {
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
               <button onClick={onClose} disabled={busy} style={{ height: 36, padding: "0 14px", borderRadius: 8, border: "0.5px solid #ccc", background: "none", cursor: "pointer" }}>ปิด</button>
-              {(!v || v.status === "returned") && (
+              {(!v || v.status === "returned") && !(ctx.meLine && ctx.meVoucher.status === "approved") && (
                 <button onClick={submit} disabled={busy || ctx.period.is_closed} title={ctx.period.is_closed ? "งวดปิดแล้ว" : ""}
                   style={{ height: 36, padding: "0 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", cursor: "pointer", fontWeight: 600, opacity: busy || ctx.period.is_closed ? 0.5 : 1 }}>
                   {busy ? "กำลังบันทึก..." : v ? "ยื่นใบเคลียเงินใหม่" : "📝 ยื่นใบเคลียเงิน"}
