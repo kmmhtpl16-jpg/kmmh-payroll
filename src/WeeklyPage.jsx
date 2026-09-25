@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
-import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { calcLateDeduction, midLeaveFactor } from "./payrollCalc";
+import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { ResignSettleModal } from "./ResignSettlePanel"; import { calcLateDeduction, midLeaveFactor } from "./payrollCalc";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."]; const DOW_TH = ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."];
 
@@ -122,6 +122,8 @@ export default function WeeklyPage({ role }) {
   const [extraIncome,  setExtraIncome]  = useState([]);
   const [cycleDateMap, setCycleDateMap] = useState({});
   const [vouchers,     setVouchers]     = useState({});
+  const [resignVs,     setResignVs]     = useState({});
+  const [settleEmp,    setSettleEmp]    = useState(null);  // 🆕 เปิดหน้าต่างเคลียเงินลาออกจากแถวใบสิ้นเดือน   // 🆕 employee_id → ใบเคลียเงินลาออก (kind=resign)
   const [cycles,       setCycles]       = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [msg,          setMsg]          = useState(null);
@@ -149,7 +151,7 @@ export default function WeeklyPage({ role }) {
 
       const { data: pr } = await supabase
         .from("payroll_records")
-        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation, monthly_salary, daily_rate)")
+        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation, monthly_salary, daily_rate, is_active, resigned_date)")
         .eq("period_id", per.id);
       const sorted = sortByEmpCode(pr || []);
       setPayrolls(sorted);
@@ -189,9 +191,13 @@ export default function WeeklyPage({ role }) {
 
       const { data: vList } = await supabase
         .from("payout_vouchers").select("*").eq("period_id", per.id);
-      const vMap = {};
-      for (const v of (vList || [])) vMap[v.cycle_date || "month_end"] = v;
-      setVouchers(vMap);
+      const vMap = {}, rMap = {};
+      for (const v of (vList || [])) {
+        // 🆕 ใบเคลียเงินลาออก แยกออก — ไม่ใช่ใบของรอบ (cycle_date ของมันคือวันที่จ่าย อาจชนวันเสาร์)
+        if (v.kind === "resign") { if (v.employee_id && v.status !== "returned" && v.status !== "cancelled") rMap[v.employee_id] = v; continue; }
+        vMap[v.cycle_date || "month_end"] = v;
+      }
+      setVouchers(vMap); setResignVs(rMap);
 
       // 🔧 v7: ประกันงานสะสม + สิทธิ์ลา (สำหรับสลิปสิ้นเดือน)
       const { data: insb } = await supabase
@@ -293,9 +299,14 @@ export default function WeeklyPage({ role }) {
     }, 0);
   }
 
+  // 🆕 ยอดที่เคลียไปกับใบลาออกแล้ว (ยื่น/อนุมัติ) — หักออกจากใบสิ้นเดือน กันจ่ายซ้ำ
+  function getResignPaid(r) {
+    const v = resignVs[r.employee_id];
+    return v ? Number(v.total_amount || 0) : 0;
+  }
   function getMonthEndPay(r) {
     const net = r.net_pay != null ? r.net_pay : (r.total_income||0)-(r.total_deduct||0);
-    return parseFloat((net - getEmpSaturdayTotal(r)).toFixed(2));
+    return parseFloat((net - getEmpSaturdayTotal(r) - getResignPaid(r)).toFixed(2));
   }
 
   // ════════════════════════════════════════════════════════════
@@ -338,7 +349,8 @@ export default function WeeklyPage({ role }) {
   const allNetTotal      = payrolls.reduce((s,r) => s + (r.net_pay ?? (r.total_income||0)-(r.total_deduct||0)), 0);
   const allSaturdayTotal = payrolls.reduce((s,r) => s + getEmpSaturdayTotal(r), 0);
   const monthEndTotal    = payrolls.reduce((s,r) => s + getMonthEndPay(r), 0);
-  const grandTotal       = allSaturdayTotal + monthEndTotal;
+  const resignTotal      = payrolls.reduce((s,r) => s + getResignPaid(r), 0);
+  const grandTotal       = allSaturdayTotal + monthEndTotal + resignTotal;
   const isBalanced       = Math.abs(grandTotal - allNetTotal) < 1;
 
   function buildLines(rows) {
@@ -736,6 +748,7 @@ export default function WeeklyPage({ role }) {
           </span>
           <span style={{ fontSize:13, color:"#475569" }}>
             เสาร์รวม <b>{fmtInt(allSaturdayTotal)}</b>
+            {resignTotal ? <>{" + เคลียลาออก "}<b>{fmtInt(resignTotal)}</b></> : null}
             {" + สิ้นเดือน "}<b>{fmtInt(monthEndTotal)}</b>
             {" = "}<b>{fmtInt(grandTotal)}</b>
             {"  |  สุทธิรวม "}<b>{fmtInt(allNetTotal)}</b>
@@ -867,7 +880,20 @@ export default function WeeklyPage({ role }) {
                     return (
                       <tr key={r.employee_id} style={s.tr}>
                         <td style={{ ...s.td, color:"#94a3b8", fontSize:12 }}>{r.employees?.emp_code}</td>
-                        <td style={{ ...s.td, fontWeight:700 }}>{r.employees?.nickname}</td>
+                        <td style={{ ...s.td, fontWeight:700 }}>{r.employees?.nickname}
+                          {(() => {
+                            const rv = resignVs[r.employee_id];
+                            if (rv) return <div style={{ fontSize:11, fontWeight:600, marginTop:3, color: rv.status==="approved" ? "#166534" : "#92400e" }}>
+                              💼 เคลียลาออก {fmtInt(rv.total_amount)} · {toBE(rv.cycle_date)} {rv.status==="approved" ? "✓" : "(รออนุมัติ)"}</div>;
+                            if (r.employees?.is_active === false && r.employees?.resigned_date) return <div style={{ fontSize:11, fontWeight:700, marginTop:3, color:"#b91c1c" }}>
+                              ⚠️ ลาออก {toBE(r.employees.resigned_date)} — ยังไม่มีใบเคลียเงิน{" "}
+                              <button onClick={() => setSettleEmp({ id: r.employee_id, ...r.employees })}
+                                style={{ marginLeft:4, background:"#b91c1c", color:"#fff", border:"none", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+                                💼 เคลียเงินลาออก (ใบแยกรายคน)
+                              </button></div>;
+                            return null;
+                          })()}
+                        </td>
                         <td style={{ ...s.td, textAlign:"center" }}>
                           <span style={{ fontSize:12, padding:"3px 10px", borderRadius:20, fontWeight:700,
                             background: isME?"#7c3aed":"#0ea5e9", color:"#fff" }}>
@@ -904,7 +930,13 @@ export default function WeeklyPage({ role }) {
             </div>{!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
             {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows} locked={period?.is_closed}
               totalPay={monthEndTotal} submitting={submitting} approving={approving}
-              onSubmit={() => submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true)}
+              onSubmit={() => {
+                const unsettled = meRows.filter(({ record:r, toPay }) => r.employees?.is_active === false && r.employees?.resigned_date && !resignVs[r.employee_id] && Math.abs(toPay) >= 1);
+                if (unsettled.length && !window.confirm(
+                  "มีคนลาออกที่ยังไม่มีใบเคลียเงิน: " + unsettled.map(x => `${x.record.employees?.nickname} ${fmtInt(x.toPay)}`).join(", ") +
+                  "\n\nยอดนี้จะถูกรวมจ่ายในใบสิ้นเดือนนี้\nถ้าโอน/จ่ายให้ไปแล้ว ให้กด 'ยกเลิก' แล้วทำใบเคลียเงินลาออกก่อน (กันจ่ายซ้ำ)\n\nยืนยันรวมจ่ายในใบสิ้นเดือน?")) return;
+                submitVoucher({ dateFrom:new Date(year,month-1,1), dateTo:new Date(year,month,0), isMonthEnd:true }, meRows, true);
+              }}
               onApprove={() => approveVoucher("month_end")}
               onReturn={() => setReturnModal({ cycleKey:"month_end" })}
               onPrint={() => openPrintModal(voucherMe)}
@@ -942,6 +974,11 @@ export default function WeeklyPage({ role }) {
       )}
 
       {detail && <DetailModal detail={detail} onClose={() => setDetail(null)} />}
+
+      {settleEmp && (
+        <ResignSettleModal emp={settleEmp} role={role} onClose={() => setSettleEmp(null)}
+          onDone={(m) => { setSettleEmp(null); setMsg({ type:"ok", text:"✅ " + m }); loadAll(); }} />
+      )}
 
       {printModal && (() => {
         const plines = [...(printModal.voucher.lines || [])]

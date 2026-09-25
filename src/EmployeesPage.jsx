@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
+import { ResignSettleBanner, ResignSettleChip, ResignSettleModal, loadResignVouchers, SETTLE_WINDOW_DAYS } from './ResignSettlePanel'
 
 const COLORS = [
   { bg: '#E6F1FB', fg: '#0C447C' },
@@ -67,7 +68,7 @@ const EMPTY_FORM = {
   app_fee_status: '', trial_start_date: '', permanent_start_date: '',
 }
 
-export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLinked, onGoAttendance } = {}) {
+export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDeviceLinked, onGoAttendance } = {}) {
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -98,6 +99,15 @@ export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLink
   const [enrollBusy, setEnrollBusy] = useState(false)
 
   useEffect(() => { fetchEmployees(); fetchEvalRoster(); fetchProgStatus() }, [])
+
+  // 🆕 25ก.ย.69 เคลียเงินพนักงานลาออก (payout_vouchers kind='resign')
+  const [settleMap, setSettleMap] = useState({})    // { employee_id: voucher|null }
+  const [settleEmp, setSettleEmp] = useState(null)
+  const resignedRecent = employees.filter(e => !e.is_active && e.resigned_date &&
+    (Date.now() - new Date(e.resigned_date).getTime()) / 86400000 <= SETTLE_WINDOW_DAYS)
+  const resignedKey = resignedRecent.map(e => e.id).join(',')
+  async function fetchSettle() { setSettleMap(await loadResignVouchers(resignedRecent.map(e => e.id))) }
+  useEffect(() => { fetchSettle() }, [resignedKey])
 
   // 🆕 25ก.ย.69 มาจากกล่องแดงหน้าบันทึกเวลา → เปิดฟอร์มเพิ่มพนักงานพร้อมเลขเครื่อง/วันเริ่มใช้
   const [devLink, setDevLink] = useState(null)       // { uid, from } ของฟอร์มที่เปิดอยู่
@@ -399,7 +409,7 @@ export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLink
       .eq('id', resignModal.emp.id)
     setResignSaving(false)
     if (error) { showToast('บันทึกลาออกไม่ได้: ' + error.message, 'error'); return }
-    showToast(`บันทึกการลาออก ${resignModal.emp.nickname} (${toBE(resignDate)}) แล้ว ✓`)
+    showToast(`บันทึกการลาออก ${resignModal.emp.nickname} (${toBE(resignDate)}) แล้ว ✓ — ขั้นต่อไป: กด 💼 เคลียเงินลาออก`)
     closeResign()
     fetchEmployees()
   }
@@ -481,6 +491,8 @@ export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLink
         </select>
       </div>
 
+      <ResignSettleBanner resigned={resignedRecent} settleMap={settleMap} onOpen={setSettleEmp} />
+
       {linkedNote && (
         <div style={{ background: '#EAF3DE', border: '0.5px solid #C0DD97', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13, color: '#27500A', lineHeight: 1.6, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ flex: 1 }}>✓ ผูกเลขเครื่อง <b>{linkedNote.uid}</b> กับ <b>{linkedNote.nickname}</b> แล้ว (ตั้งแต่ {toBE(linkedNote.from)}) — ขั้นต่อไป: กลับไปหน้าบันทึกเวลา แล้ว<b>ดึงข้อมูลตั้งแต่ {toBE(linkedNote.from)} ใหม่</b> เพื่อให้เวลาสแกนของคนนี้เข้ามา</span>
@@ -550,6 +562,9 @@ export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLink
                             <span style={{ color: '#A32D2D', marginLeft: 6 }}>· ออก {toBE(e.resigned_date)}</span>
                           )}
                         </div>
+                        {!e.is_active && e.resigned_date && e.id in settleMap && (
+                          <ResignSettleChip emp={e} voucher={settleMap[e.id]} onOpen={setSettleEmp} />
+                        )}
                         {/* 🆕 ตำแหน่ง + สถานะโปรแกรม */}
                         {e.is_active && (() => {
                           const st = progStatus[e.id]
@@ -852,6 +867,11 @@ export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLink
             </div>
           </div>
         </div>
+      )}
+
+      {settleEmp && (
+        <ResignSettleModal emp={settleEmp} role={role} onClose={() => setSettleEmp(null)}
+          onDone={(m) => { setSettleEmp(null); showToast(m); fetchSettle() }} />
       )}
 
       {/* ═══ 🆕 Modal ส่งเข้าโปรแกรมตามตำแหน่ง ═══ */}
