@@ -1,6 +1,6 @@
 // src/AttendancePage.jsx
 import { useState, useEffect } from "react";
-import { parseZKTecoCSV, punchesToRows, calcDay, calcHalfDay } from "./attendanceLogic";
+import { parseZKTecoCSV, punchesToRows, calcDay, calcHalfDay, SCANNER_IGNORE_UIDS } from "./attendanceLogic";
 import { saveAttendanceToSupabase, loadRecentImports, deleteImport, findProtectedConflicts } from "./supabaseAttendance";
 import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
@@ -95,7 +95,10 @@ function to24h(val) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
 
-export default function AttendancePage({ role }) {
+export default function AttendancePage({ role, onAddFromScanner, linkedHint, onHintDone }) {
+  const [linkPick, setLinkPick] = useState(null);   // 🆕 { uid, from, emp } กล่องผูกกับพนักงานที่มีอยู่
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkMsg, setLinkMsg] = useState(null);     // ข้อความหลังผูกสำเร็จ (ให้ดึงใหม่)
   const [processed, setProcessed] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [fileName, setFileName] = useState("");
@@ -111,8 +114,10 @@ export default function AttendancePage({ role }) {
   // 🆕 ดึงจากเครื่องสแกน
   const [scanFrom, setScanFrom] = useState("");
   const [scanTo, setScanTo] = useState("");
-  const [scanDatesTouched, setScanDatesTouched] = useState(false);
+  const [scanDatesTouched, setScanDatesTouched] = useState(() => !!linkedHint); // มาจากผูกเลขเครื่อง = ใช้ช่วงวันที่ตั้งให้ ไม่ทับด้วยค่าเริ่มต้น
   const [scanLoading, setScanLoading] = useState(false);
+  const [recentPunches, setRecentPunches] = useState([]); // 🆕 25ก.ย.69 สแกน 14 วันล่าสุด → หาเลขเครื่องที่ยังไม่ผูก
+  const [deviceMapReady, setDeviceMapReady] = useState(false);
   const [scanSync, setScanSync] = useState(null);   // app_config.scanner_last_sync
   const [scanMsg, setScanMsg] = useState(null);     // { kind: "warn"|"error"|"info", text }
 
@@ -131,6 +136,26 @@ export default function AttendancePage({ role }) {
   const [reviewMonth, setReviewMonth] = useState(currentMonthKey());   // 📅 กรองเดือนแก้ไขย้อนหลัง
 
   useEffect(() => { loadEmployees(); loadDeviceMap(); loadHistory(); loadScanSync(); }, []);
+  useEffect(() => {
+    if (!linkedHint) return;
+    setLinkMsg(linkedHint);
+    setScanDatesTouched(true); setScanFrom(linkedHint.from); setScanTo(thTodayISO());
+    onHintDone && onHintDone();
+  }, [linkedHint]);
+
+  // 🆕 ผูกเลขเครื่องกับพนักงานที่มีอยู่แล้ว (HR เลือกเอง)
+  const confirmLink = async () => {
+    if (!linkPick?.emp) return;
+    setLinkBusy(true);
+    const { data, error } = await supabase.rpc("emp_link_device", { p_emp: linkPick.emp, p_uid: linkPick.uid, p_from: linkPick.from });
+    setLinkBusy(false);
+    if (error || !data?.ok) { setLinkMsg({ error: (error?.message || data?.error) }); return; }
+    const note = { uid: linkPick.uid, from: linkPick.from, nickname: data.nickname };
+    setLinkPick(null);
+    setLinkMsg(note);
+    setScanDatesTouched(true); setScanFrom(linkPick.from); setScanTo(thTodayISO());
+    await loadDeviceMap();
+  };
 
   // 🆕 ค่าเริ่มต้นช่องวันที่ = วันถัดจากที่นำเข้าล่าสุด → เมื่อวาน (ถ้านำเข้าถึงเมื่อวานแล้ว = วันนี้)
   useEffect(() => {
@@ -146,11 +171,29 @@ export default function AttendancePage({ role }) {
   }, [imports, scanDatesTouched]);
 
   // 🆕 เวลาที่เครื่องแม่ส่งข้อมูลเข้ามาล่าสุด (เรียก RPC ช่วงวันเดียว เบาๆ)
+  // 🆕 25ก.ย.69 ดึงย้อน 14 วันถึงวันนี้ ใช้หา "เลขเครื่องที่ยังไม่ผูก" โดยไม่ขึ้นกับวันที่ HR เลือกดึง
+  //    (เคสจริง: คนใหม่สแกนครั้งแรกเช้า 25 ก.ย. แต่ HR ดึงแค่ 24 ก.ย. → กล่องแดงเดิมไม่ขึ้น)
   const loadScanSync = async () => {
     const today = thTodayISO();
-    const { data, error } = await supabase.rpc("get_scanner_punches", { p_from: today, p_to: today });
-    if (!error && data) setScanSync(data.last_sync || null);
+    const { data, error } = await supabase.rpc("get_scanner_punches", { p_from: addDaysISO(today, -13), p_to: today });
+    if (!error && data) { setScanSync(data.last_sync || null); setRecentPunches(data.punches || []); }
   };
+
+  // เลขเครื่องที่สแกนใน 14 วันล่าสุด แต่ยังไม่อยู่ในตารางจับคู่ (ข้ามเลขที่ตั้งให้ข้ามไว้)
+  const unmappedUids = (() => {
+    if (!deviceMapReady) return [];
+    const by = {};
+    for (const [uidRaw, ts] of recentPunches) {
+      const uid = String(uidRaw).trim();
+      if (SCANNER_IGNORE_UIDS.has(uid) || deviceMap[uid]) continue;
+      const t = String(ts);
+      const r = (by[uid] ||= { uid, first: t, last: t, days: new Set() });
+      if (t < r.first) r.first = t;
+      if (t > r.last) r.last = t;
+      r.days.add(t.slice(0, 10));
+    }
+    return Object.values(by).sort((a, b) => a.first.localeCompare(b.first));
+  })();
 
   // 🆕 กดดึงจากเครื่องสแกน → แปลงเป็นแถวแบบเดียวกับ CSV → ใช้เส้นทางตรวจ/บันทึกเดิมทั้งหมด
   const handlePullScanner = async () => {
@@ -195,6 +238,7 @@ export default function AttendancePage({ role }) {
       setScanMsg({ kind: "error", text: "ดึงข้อมูลไม่สำเร็จ: " + (e.message || e) });
     } finally {
       setScanLoading(false);
+      loadScanSync();
     }
   };
 
@@ -213,6 +257,7 @@ export default function AttendancePage({ role }) {
       if (code) m[String(r.device_uid).trim()] = code;
     });
     setDeviceMap(m);
+    setDeviceMapReady(true);
   };
 
   const loadEmployees = async () => {
@@ -663,6 +708,65 @@ export default function AttendancePage({ role }) {
               </div>
             );
           })()}
+
+          {linkMsg && (
+            <div style={{ background: linkMsg.error ? "#fef2f2" : "#f0fdf4", border: `1px solid ${linkMsg.error ? "#fca5a5" : "#86efac"}`, borderRadius:10, padding:"10px 12px", marginBottom:12, fontSize:13, color: linkMsg.error ? "#991b1b" : "#166534", lineHeight:1.6 }}>
+              {linkMsg.error
+                ? <>❌ ผูกเลขเครื่องไม่สำเร็จ: {linkMsg.error}</>
+                : <>✓ ผูกเลขเครื่อง <b>{linkMsg.uid}</b> กับ <b>{linkMsg.nickname}</b> แล้ว · ตั้งช่วงวันที่ในกล่อง 📡 เป็น {dayLabelTH(linkMsg.from)} – วันนี้ให้แล้ว → <b>กด "ดึงข้อมูล" เพื่อให้เวลาสแกนของคนนี้เข้ามา</b> แล้วตรวจก่อนบันทึก</>}
+              <button onClick={() => setLinkMsg(null)} style={{ marginLeft:8, background:"none", border:"none", cursor:"pointer", color:"#666" }}>×</button>
+            </div>
+          )}
+
+          {/* 🆕 25ก.ย.69 เลขเครื่องใหม่ที่ยังไม่ผูก — เช็กย้อน 14 วันถึงวันนี้ ไม่ขึ้นกับวันที่เลือกดึง · ค้างจนกว่าจะผูก */}
+          {unmappedUids.length > 0 && (
+            <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:10, padding:"10px 12px", marginBottom:12 }}>
+              <p style={{ margin:"0 0 6px", fontWeight:700, color:"#991b1b", fontSize:14 }}>
+                🆕 มีเลขเครื่องสแกนที่ยังไม่ผูกกับพนักงาน {unmappedUids.length} เลข (14 วันล่าสุด)
+              </p>
+              <ul style={{ margin:"0 0 6px 18px", padding:0, color:"#7f1d1d", fontSize:13 }}>
+                {unmappedUids.map((r) => (
+                  <li key={r.uid}>
+                    เลขเครื่อง <b>{r.uid}</b> · เริ่มสแกน {dayLabelTH(r.first.slice(0,10))} {r.first.slice(11,16)} น.
+                    · สแกน {r.days.size} วัน · ล่าสุด {dayLabelTH(r.last.slice(0,10))} {r.last.slice(11,16)} น.
+                    <div style={{ display:"flex", gap:6, margin:"4px 0 6px", flexWrap:"wrap" }}>
+                      {onAddFromScanner && (
+                        <button onClick={() => onAddFromScanner({ uid: r.uid, from: r.first.slice(0,10) })}
+                          style={{ background:"#991b1b", color:"#fff", border:"none", borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:12, fontWeight:600 }}>
+                          ➕ เพิ่มเป็นพนักงานใหม่
+                        </button>
+                      )}
+                      <button onClick={() => { setLinkMsg(null); setLinkPick({ uid: r.uid, from: r.first.slice(0,10), emp: "" }); }}
+                        style={{ background:"#fff", color:"#991b1b", border:"1px solid #fca5a5", borderRadius:6, padding:"4px 10px", cursor:"pointer", fontSize:12 }}>
+                        🔗 ผูกกับพนักงานที่มีอยู่
+                      </button>
+                    </div>
+                    {linkPick?.uid === r.uid && (
+                      <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap", background:"#fff", border:"1px solid #fca5a5", borderRadius:8, padding:"6px 8px", marginBottom:6 }}>
+                        <select value={linkPick.emp} onChange={(e) => setLinkPick((p) => ({ ...p, emp: e.target.value }))}
+                          style={{ height:30, borderRadius:6, border:"1px solid #ddd", fontSize:13 }}>
+                          <option value="">— เลือกพนักงาน —</option>
+                          {employees.map((e) => <option key={e.id} value={e.id}>{e.emp_code} {e.nickname}</option>)}
+                        </select>
+                        <span style={{ fontSize:12 }}>เริ่มใช้</span>
+                        <input type="date" value={linkPick.from} onChange={(e) => setLinkPick((p) => ({ ...p, from: e.target.value }))}
+                          style={{ height:30, borderRadius:6, border:"1px solid #ddd" }} />
+                        <button onClick={confirmLink} disabled={!linkPick.emp || linkBusy}
+                          style={{ background:"#111", color:"#fff", border:"none", borderRadius:6, padding:"5px 12px", cursor:"pointer", fontSize:12, opacity: (!linkPick.emp || linkBusy) ? 0.5 : 1 }}>
+                          {linkBusy ? "กำลังผูก..." : "ยืนยันผูก"}
+                        </button>
+                        <button onClick={() => setLinkPick(null)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:12, color:"#666" }}>ยกเลิก</button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p style={{ margin:0, fontSize:12, color:"#7f1d1d", lineHeight:1.6 }}>
+                เวลาสแกนของเลขนี้<b>จะไม่ถูกนำเข้า</b>จนกว่าจะผูก → ถ้าเป็นพนักงานใหม่: เพิ่มชื่อในแท็บ 👤 พนักงาน แล้วผูกเลขเครื่องในตาราง device_user_map
+                (วันเริ่มใช้ = วันที่เริ่มสแกนข้างบน เผื่อเลขนี้เคยเป็นของคนเก่า) · ผูกแล้วกล่องนี้หายเอง
+              </p>
+            </div>
+          )}
 
           <label style={s.uploadZone}>
             <input type="file" accept=".csv,.txt" onChange={handleFile} style={{ display:"none" }} />

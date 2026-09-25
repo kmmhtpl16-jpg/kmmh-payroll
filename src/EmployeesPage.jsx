@@ -67,7 +67,7 @@ const EMPTY_FORM = {
   app_fee_status: '', trial_start_date: '', permanent_start_date: '',
 }
 
-export default function EmployeesPage() {
+export default function EmployeesPage({ scanPrefill, onPrefillUsed, onDeviceLinked, onGoAttendance } = {}) {
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -98,6 +98,17 @@ export default function EmployeesPage() {
   const [enrollBusy, setEnrollBusy] = useState(false)
 
   useEffect(() => { fetchEmployees(); fetchEvalRoster(); fetchProgStatus() }, [])
+
+  // 🆕 25ก.ย.69 มาจากกล่องแดงหน้าบันทึกเวลา → เปิดฟอร์มเพิ่มพนักงานพร้อมเลขเครื่อง/วันเริ่มใช้
+  const [devLink, setDevLink] = useState(null)       // { uid, from } ของฟอร์มที่เปิดอยู่
+  const [linkedNote, setLinkedNote] = useState(null) // { uid, from, nickname } หลังผูกสำเร็จ
+  useEffect(() => {
+    if (!scanPrefill) return
+    openModal()
+    setDevLink({ uid: String(scanPrefill.uid), from: scanPrefill.from })
+    setForm(f => ({ ...f, trial_start_date: scanPrefill.from || '' }))
+    onPrefillUsed && onPrefillUsed()
+  }, [scanPrefill])
 
   async function fetchProgStatus() {
     const { data, error } = await supabase.rpc('emp_program_status')
@@ -272,7 +283,7 @@ export default function EmployeesPage() {
     setModalOpen(true)
   }
 
-  function closeModal() { setModalOpen(false) }
+  function closeModal() { setModalOpen(false); setDevLink(null) }
 
   function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
@@ -294,6 +305,10 @@ export default function EmployeesPage() {
     // 🆕 v3 [ค่าสมัคร] ต้องเลือกก่อนบันทึก (ถ้าข้าม เงิน 100 จะไม่ถูกหักแบบเงียบๆ)
     if (!form.app_fee_status) {
       showToast('เลือกค่าสมัครงาน 100 บ. ด้วยนะคะ', 'error')
+      return
+    }
+    if (!editId && devLink && !form.emp_code) {
+      showToast('ใส่รหัสพนักงานด้วย — ระบบบันทึกเวลาจับคู่เลขเครื่องด้วยรหัส', 'error')
       return
     }
     setSaving(true)
@@ -328,6 +343,17 @@ export default function EmployeesPage() {
     if (error) { showToast('บันทึกไม่ได้: ' + error.message, 'error'); return }
     showToast(editId ? 'แก้ไขข้อมูลสำเร็จ ✓' : 'เพิ่มพนักงานสำเร็จ ✓')
     const wasNew = !editId
+    // 🆕 ผูกเลขเครื่องสแกน (มาจากกล่องแดงหน้าบันทึกเวลา)
+    if (wasNew && devLink && savedId) {
+      const { data: lk, error: lkErr } = await supabase.rpc('emp_link_device', { p_emp: savedId, p_uid: devLink.uid, p_from: devLink.from })
+      if (lkErr || !lk?.ok) {
+        showToast('บันทึกพนักงานแล้ว แต่ผูกเลขเครื่องไม่สำเร็จ: ' + (lkErr?.message || lk?.error), 'error')
+      } else {
+        const note = { uid: devLink.uid, from: devLink.from, nickname: lk.nickname }
+        setLinkedNote(note)
+        onDeviceLinked && onDeviceLinked(note)
+      }
+    }
     closeModal()
     fetchEmployees()
     // 🆕 ตำแหน่งไม่ตรงกับโปรแกรม → เด้งกล่องให้ HR ยืนยันเอง (ระบบไม่ส่งให้เอง)
@@ -454,6 +480,15 @@ export default function EmployeesPage() {
           <option value="inactive">ลาออกแล้ว</option>
         </select>
       </div>
+
+      {linkedNote && (
+        <div style={{ background: '#EAF3DE', border: '0.5px solid #C0DD97', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 13, color: '#27500A', lineHeight: 1.6, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>✓ ผูกเลขเครื่อง <b>{linkedNote.uid}</b> กับ <b>{linkedNote.nickname}</b> แล้ว (ตั้งแต่ {toBE(linkedNote.from)}) — ขั้นต่อไป: กลับไปหน้าบันทึกเวลา แล้ว<b>ดึงข้อมูลตั้งแต่ {toBE(linkedNote.from)} ใหม่</b> เพื่อให้เวลาสแกนของคนนี้เข้ามา</span>
+          {onGoAttendance && (
+            <button onClick={onGoAttendance} style={{ background: '#27500A', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}>⏱ ไปหน้าบันทึกเวลา</button>
+          )}
+        </div>
+      )}
 
       {/* 🆕 ตรวจรายชื่อโปรแกรมเทียบตำแหน่ง */}
       {(() => {
@@ -641,6 +676,16 @@ export default function EmployeesPage() {
               <span style={{ fontWeight: 600, fontSize: 16 }}>{editId ? 'แก้ไขข้อมูลพนักงาน' : 'เพิ่มพนักงานใหม่'}</span>
               <button onClick={closeModal} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#aaa' }}>×</button>
             </div>
+
+            {/* 🆕 มาจากเครื่องสแกน */}
+            {!editId && devLink && (
+              <div style={{ background: '#EAF1FB', border: '0.5px solid #B9D3F0', borderRadius: 8, padding: '8px 12px', marginBottom: 16, fontSize: 12, color: '#1A4B82', lineHeight: 1.6 }}>
+                📡 จากเครื่องสแกน: <b>เลขเครื่อง {devLink.uid}</b> · เริ่มใช้ตั้งแต่{' '}
+                <input type="date" value={devLink.from || ''} onChange={e => setDevLink(d => ({ ...d, from: e.target.value }))}
+                  style={{ height: 26, borderRadius: 6, border: '0.5px solid #B9D3F0', padding: '0 6px' }} />
+                <div>บันทึกแล้วระบบจะผูกเลขเครื่องนี้กับคนนี้ให้ · <b>ต้องใส่รหัสพนักงาน</b></div>
+              </div>
+            )}
 
             {/* 🆕 แจ้งเตือนถ้ากำลังแก้คนที่ลาออกแล้ว */}
             {editId && !editIsActive && (

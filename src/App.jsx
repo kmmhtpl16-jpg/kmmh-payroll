@@ -30,6 +30,9 @@ const TABS = [
 export default function App() {
   const [role, setRole] = useState(null);
   const [activeTab, setActiveTab] = useState("attendance");
+  // 🆕 25ก.ย.69 เพิ่มพนักงานใหม่จากเลขเครื่องสแกน: บันทึกเวลา → พนักงาน → (ผูกเสร็จ) กลับมาดึงข้อมูลใหม่
+  const [scanPrefill, setScanPrefill] = useState(null);   // { uid, from }
+  const [scanLinked, setScanLinked] = useState(null);     // { uid, from, nickname }
   if (!role) return <LoginPage onLogin={(r) => setRole(r)} />;
   return (
     <div style={styles.app}>
@@ -49,8 +52,13 @@ export default function App() {
         ))}
       </nav>
       <main style={styles.main}>
-        {activeTab === "attendance"  && <AttendancePage role={role} />}
-        {activeTab === "employees"   && <EmployeesPage role={role} />}
+        {activeTab === "attendance"  && <AttendancePage role={role}
+          linkedHint={scanLinked} onHintDone={() => setScanLinked(null)}
+          onAddFromScanner={(d) => { setScanPrefill(d); setActiveTab("employees"); }} />}
+        {activeTab === "employees"   && <EmployeesPage role={role}
+          scanPrefill={scanPrefill} onPrefillUsed={() => setScanPrefill(null)}
+          onDeviceLinked={(d) => setScanLinked(d)}
+          onGoAttendance={() => setActiveTab("attendance")} />}
         {activeTab === "deductions"  && <DeductionsPage role={role} />}
         {activeTab === "extra"       && <ExtraIncomePage role={role} />}
         {activeTab === "leave"       && <LeavePage role={role} />}
