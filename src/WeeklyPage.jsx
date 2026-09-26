@@ -9,6 +9,7 @@
 // 🔧 v5.1: รวม income_type='other' (disburse_on='saturday') เข้ารอบเสาร์ด้วย
 //          (อยู่ใน net_pay แล้ว → สูตรสิ้นเดือน = สุทธิ − เสาร์ นับครั้งเดียว ยอดตรง)
 // 🔧 v5.2: สลิปสิ้นเดือน + ป็อปอัปรายคน โชว์บรรทัด "คืนค่าประกันงาน/ค่าสมัครงาน" (เฉพาะตอนลาออก)
+// 🔧 v5.6: ค่าสมัครงาน 100 บ. หักในรอบเสาร์แรกที่เริ่มงาน (โชว์ในช่อง "เบิกในรอบ")
 // 🔧 v5.3: "ลาครึ่งวัน" ตัดออกจากรอบเสาร์ด้วย → ทุกการลาจ่ายสิ้นเดือน (เดิมเฉพาะ ลาป่วย/ลากิจ/ขาด)
 
 import { useState, useEffect, useCallback } from "react";
@@ -151,7 +152,7 @@ export default function WeeklyPage({ role }) {
 
       const { data: pr } = await supabase
         .from("payroll_records")
-        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation, monthly_salary, daily_rate, is_active, resigned_date)")
+        .select("*, employees(nickname, full_name, emp_type, emp_code, pay_schedule, probation, monthly_salary, daily_rate, is_active, resigned_date, trial_start_date)")
         .eq("period_id", per.id);
       const sorted = sortByEmpCode(pr || []);
       setPayrolls(sorted);
@@ -263,7 +264,18 @@ export default function WeeklyPage({ role }) {
 
   function getAdvancesInCycle(empId, cycle) {
     const f = toLocalDateStr(cycle.dateFrom), t = toLocalDateStr(cycle.dateTo);
-    return advances.filter(a => a.employee_id === empId && a.deduct_date >= f && a.deduct_date <= t);
+    const list = advances.filter(a => a.employee_id === empId && a.deduct_date >= f && a.deduct_date <= t);
+    // 🆕 v5.6 ค่าสมัครงาน 100 บ. หักจากค่าแรงรอบเสาร์แรก (รอบที่มีวันเริ่มงาน trial_start_date)
+    //   net_pay หัก app_fee_deduct อยู่แล้ว → สิ้นเดือน = สุทธิ − เสาร์ ยังตรง ไม่หักซ้ำ
+    if (!cycle.isMonthEnd) {
+      const pr  = payrolls.find(p => p.employee_id === empId);
+      const fee = Number(pr?.app_fee_deduct || 0);
+      const ts  = (pr?.employees?.trial_start_date || "").slice(0, 10);
+      if (fee > 0 && ts >= f && ts <= t) {
+        list.push({ employee_id: empId, amount: fee, deduct_date: ts, deduction_types: { name: "ค่าสมัครงาน" } });
+      }
+    }
+    return list;
   }
   function getAdvanceInCycle(empId, cycle) {
     return getAdvancesInCycle(empId, cycle).reduce((s,a) => s + parseFloat(a.amount||0), 0);
