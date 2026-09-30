@@ -1,6 +1,10 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.12
+// คำนวณเงินเดือน KMMH — v7.13
+// 🔧 v7.13 (30 ก.ย. 69) วันเงินเดือนออก ใช้กติกาเหมือนวันเสาร์:
+//   • เดือนนี้คิดสาย/OT ของวันเงินเดือนออกแค่ "ส่วนเช้า" (เวลาเข้า)
+//   • สาย/OT ช่วงเที่ยง-เย็นวันนั้น (HR/เครื่องเติมทีหลัง) → ยกไปหัก/จ่ายเดือนถัดไป
+//   • ยอดเดือนที่จ่ายไปแล้วไม่ขยับแม้กดคำนวณใหม่
 // Logic ตาม KMMH_payroll_logic_v2.md
 //
 // 🔧 v7.12 เปลี่ยนจาก v7.11:
@@ -112,6 +116,19 @@
 // ─────────────────────────────────────────────────────────────
 
 import { supabase } from "./supabaseClient";
+import { calcDay, isPayday, paydayOf, PAYDAY_RULE_START } from "./attendanceLogic";
+
+// 🆕 v7.13 วันเงินเดือนออก — แยกสาย/OT ของวันนั้นเป็น "ส่วนเช้า" (จ่ายเดือนนี้)
+//   กับ "ส่วนเที่ยง-เย็น" (รู้ทีหลัง → ยกไปเดือนถัดไป) กันยอดเดือนที่จ่ายไปแล้วขยับ
+function paydaySplit(log, empCode) {
+  const m = calcDay({ checkIn: log.scan_am_in, lunchOut: null, lunchIn: null, checkOut: null,
+                      empCode, date: log.work_date });
+  const late = log.late_minutes || 0;
+  const ot   = parseFloat(log.ot_hours || 0);
+  const mLate = Math.min(late, m.lateMin);
+  const mOt   = Math.min(ot, m.otHours);
+  return { mLate, mOt, carryLate: late - mLate, carryOt: Math.max(0, ot - mOt), totalLate: late };
+}
 
 // deduction_type_id ของ "เบิกเงินสด" — แยกออกจาก other_deduct ไปอยู่ใน advance_total
 // 🔧 v7.4 [#7] เบิกอ่านจาก deductions ชนิดนี้ "ที่เดียว" (เลิกอ่าน advance_requests)
@@ -328,6 +345,21 @@ export async function calcPayroll(year, month) {
       (insBalanceExclMap[r.employee_id] || 0) + Number(r.amount || 0);
   });
 
+  // 🆕 v7.13 — ส่วนเที่ยง-เย็นของ "วันเงินเดือนออก" เดือนก่อน → มาหัก/จ่ายเดือนนี้
+  const prevY = month === 1 ? ce - 1 : ce;
+  const prevM = month === 1 ? 12 : month - 1;
+  const prevPayday = paydayOf(prevY, prevM);
+  let prevPaydayLogs = [];
+  if (prevPayday >= PAYDAY_RULE_START) {
+    const { data: ppl, error: pplErr } = await supabase
+      .from("attendance_logs")
+      .select("*")
+      .in("employee_id", empIds)
+      .eq("work_date", prevPayday);
+    if (pplErr) throw new Error("โหลดเวลาวันเงินเดือนออกเดือนก่อนไม่ได้: " + pplErr.message);
+    prevPaydayLogs = ppl || [];
+  }
+
   // ── คำนวณรายคน ──
   const results = [];
 
@@ -357,6 +389,10 @@ export async function calcPayroll(year, month) {
     let has_leave    = false;
     let leave_days   = 0;   // 🆕 จำนวนวันลาครึ่งวัน (0.5 ต่อครั้ง)
     let leave_deduct = 0;   // 🆕 หักค่าแรงครึ่งวันอัตโนมัติ
+    let payday_pending_late = 0; // 🆕 v7.13 สายเที่ยง-เย็นวันเงินเดือนออกเดือนนี้ → ไปหักเดือนหน้า
+    let payday_pending_ot   = 0;
+    let payday_carry_late   = 0; // 🆕 v7.13 ยกมาจากวันเงินเดือนออกเดือนก่อน
+    let payday_carry_ot     = 0;
 
     for (const log of empLogs) {
       if (log.needs_hr_review) has_review = true;
@@ -389,18 +425,47 @@ export async function calcPayroll(year, month) {
       if (usePerm) perm_base  += dayRate * dayFactor;
       else         trial_base += dayRate * dayFactor;
 
-      const lateMin = log.late_minutes || 0;
+      let lateMin = log.late_minutes || 0;
+      let dayOt   = parseFloat(log.ot_hours || 0);
+      // 🆕 v7.13 วันเงินเดือนออก → เดือนนี้คิดแค่ส่วนเช้า ส่วนเที่ยง-เย็นยกไปเดือนหน้า
+      if (isPayday(log.work_date)) {
+        const sp = paydaySplit(log, emp.emp_code);
+        lateMin = sp.mLate; dayOt = sp.mOt;
+        payday_pending_late = sp.carryLate;
+        payday_pending_ot   = sp.carryOt;
+      }
       late_minutes += lateMin;
       const rateTag = lateTagMap[`${emp.id}_${log.work_date}`] || ((emp.probation && !/แจ้งล่วงหน้า/.test(log.hr_note||'')) ? 5 : 1);
       late_deduct  += calcLateDeduction(lateMin, rateTag, hourlyRate);
 
-      ot_hours += parseFloat(log.ot_hours || 0);
+      ot_hours += dayOt;
 
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
       if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) leave_days += 0.5; // นับเฉพาะ "ลา" จริง (ไม่นับขาดงานครึ่งวัน)
       if (log.hr_note && LEAVE_NOTE_RE.test(log.hr_note)) has_leave = true;
       if (isMidLeave) has_leave = true; // 🆕 v7.9 ออกระหว่างวัน → ตัดเบี้ยขยันด้วย
+    }
+
+    // 🆕 v7.13 ยกสาย/OT เที่ยง-เย็นของวันเงินเดือนออกเดือนก่อนมาคิดเดือนนี้
+    const ppl = prevPaydayLogs.find(l => l.employee_id === emp.id);
+    const pplNote = ppl?.hr_note || "";
+    const pplAbsent = /ขาด/.test(pplNote) && !/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(pplNote);
+    if (ppl && !pplAbsent) {
+      const sp = paydaySplit(ppl, emp.emp_code);
+      const hr = (isPerm ? dailyPerm : dailyTrial) / 8;
+      const rateTag = (emp.probation && !/แจ้งล่วงหน้า/.test(pplNote)) ? 5 : 1;
+      if (sp.carryLate > 0) {
+        payday_carry_late = sp.carryLate;
+        late_minutes += sp.carryLate;
+        // หักเฉพาะส่วนต่าง (ทั้งวัน − ส่วนเช้าที่หักไปแล้ว) → รวมสองเดือนเท่ากับหักทั้งวันครั้งเดียวเป๊ะ
+        late_deduct  += Math.max(0,
+          calcLateDeduction(sp.totalLate, rateTag, hr) - calcLateDeduction(sp.mLate, rateTag, hr));
+      }
+      if (sp.carryOt > 0) {
+        payday_carry_ot = sp.carryOt;
+        ot_hours += sp.carryOt;
+      }
     }
 
     const base_wage   = parseFloat((trial_base + perm_base).toFixed(2));
@@ -529,6 +594,10 @@ export async function calcPayroll(year, month) {
       total_deduct,
       net_pay,
       has_review,
+      payday_pending_late,                      // 🆕 v7.13
+      payday_pending_ot,
+      payday_carry_late,
+      payday_carry_ot,
     });
   }
 
