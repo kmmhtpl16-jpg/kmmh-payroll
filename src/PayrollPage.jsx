@@ -406,6 +406,20 @@ export default function PayrollPage({ role }) {
                 ["ประกันสังคม (5%)",  `(${fmt(detail.social_security)})`],
                 ["ประกันงาน",         `(${fmt(detail.job_insurance)})`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} red />)}
+              {(detail.payday_carry_late > 0 || detail.payday_carry_ot > 0) && (
+                <div style={{ fontSize:12, color:"#64748b", margin:"2px 0 6px" }}>
+                  ↪ รวมยอดยกมาจากวันเงินเดือนออกเดือนก่อน:
+                  {detail.payday_carry_late > 0 && ` สายบ่าย ${detail.payday_carry_late} น.`}
+                  {detail.payday_carry_ot > 0 && ` OT ${detail.payday_carry_ot} ชม.`}
+                </div>
+              )}
+              {(detail.payday_pending_late > 0 || detail.payday_pending_ot > 0) && (
+                <div style={{ fontSize:12, color:"#b45309", margin:"2px 0 6px" }}>
+                  ⏭ วันเงินเดือนออกเดือนนี้ ส่วนเที่ยง-เย็น ยกไปคิดเดือนหน้า:
+                  {detail.payday_pending_late > 0 && ` สาย ${detail.payday_pending_late} น.`}
+                  {detail.payday_pending_ot > 0 && ` OT ${detail.payday_pending_ot} ชม.`}
+                </div>
+              )}
 
               {/* รายจ่ายพนักงาน — แสดงรายการย่อย */}
               {detail.deduction_items?.length > 0 && (
