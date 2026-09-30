@@ -426,7 +426,9 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
 
     const allFilled = amFilled && pmFilled;
     // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
-    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt;
+    // 🆕 30 ก.ย.69 ออกระหว่างวัน = มีเวลาเข้า + เวลาออก (พักออก หรือ ออกเย็น) ก็ถือว่าตรวจเสร็จ
+    const midLeaveDone = isMidLeave && am_in !== "" && (am_out !== "" || pm_out !== "");
+    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -1132,8 +1134,8 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
                 <p style={{ margin:"0 0 8px", fontSize:11, color:"#92400e",
                   background:"#fffbeb", padding:"4px 8px", borderRadius:6,
                   border:"1px solid #fde68a" }}>
-                  ⚠️ ใช้เฉพาะ <strong>ออกระหว่างวัน</strong> เท่านั้น —
-                  ถ้าเข้าสาย/ออกก่อน/พักนาน ระบบหักให้อัตโนมัติแล้ว ไม่ต้องกรอกซ้ำ
+                  ⚠️ ปกติใส่ 0 — ออกระหว่างวัน ระบบจ่ายตามชั่วโมงให้เองแล้ว
+                  (ใส่แค่เวลาเข้า + เวลาออก) · เข้าสาย/ออกก่อน/พักนาน ก็หักอัตโนมัติ ใส่เงินเฉพาะหักพิเศษจริงๆ
                 </p>
                 <div style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <input
