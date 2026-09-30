@@ -84,6 +84,42 @@ export function isSaturday(dateStr) {
 }
 
 // ════════════════════════════════════════════════════════════════
+// 🆕 วันเงินเดือนออก (30 ก.ย. 69) — ใช้กติกาเดียวกับวันเสาร์
+//   • วันเงินเดือนออก = วันสุดท้ายของเดือน · ถ้าตรงวันอาทิตย์ → ถอยเป็นวันเสาร์
+//   • ดึงเวลาระหว่างวัน (ก่อน 17:30) มีแค่เช้า → ไม่ขึ้น "ต้องตรวจ" จ่ายตามเวลาเช้าไปก่อน
+//   • สาย/OT ช่วงเที่ยง-เย็นของวันนั้น (รู้ทีหลัง) → ยกไปหัก/จ่ายเดือนถัดไป (payrollCalc)
+//   • เริ่มใช้ 30 ก.ย. 69 — เดือนก่อนหน้าจ่ายไปแล้วแบบเดิม ไม่ยกย้อนหลัง
+// ════════════════════════════════════════════════════════════════
+export const PAYDAY_RULE_START = "2026-09-30";
+const _pad2 = (n) => String(n).padStart(2, "0");
+
+// month = 1–12 (ค.ศ.)
+export function paydayOf(year, month) {
+  const d = new Date(year, month, 0);            // วันสุดท้ายของเดือน (local)
+  if (d.getDay() === 0) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())}`;
+}
+
+export function isPayday(dateStr) {
+  if (!dateStr) return false;
+  const ds = String(dateStr).slice(0, 10);
+  if (ds < PAYDAY_RULE_START) return false;
+  const [y, m] = ds.split("-").map(Number);
+  return paydayOf(y, m) === ds;
+}
+
+// วันเงินเดือนออกที่ "ยังไม่เลิกงาน" (ก่อน 17:30 ของวันนั้น) → เวลาไม่ครบยังไม่ต้องตรวจ
+export function isPaydayPending(dateStr) {
+  if (!isPayday(dateStr)) return false;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${_pad2(now.getMonth() + 1)}-${_pad2(now.getDate())}`;
+  const ds = String(dateStr).slice(0, 10);
+  if (ds !== today) return ds > today;
+  return now.getHours() * 60 + now.getMinutes() < 17 * 60 + 30;
+}
+export const PAYDAY_PENDING_NOTE = "วันเงินเดือนออก — จ่ายตามเวลาเช้า รอเวลาเที่ยง/เย็น";
+
+// ════════════════════════════════════════════════════════════════
 // คำนวณสาย/OT จาก 4 จุดสแกน
 //   รับ { checkIn, lunchOut, lunchIn, checkOut, empCode, date }
 //   คืน { lateMin, otHours, breakdown[] }
@@ -407,12 +443,19 @@ export function parseZKTecoCSV(text, dbMap) {
     const outs = splitTimes(outS);
     const sat  = isSaturday(date);
 
+    const res = assignPunches(ins, outs, sat);
+    // 🆕 วันเงินเดือนออก ดึงระหว่างวัน → ไม่ครบ 4 จุดยังไม่ต้องตรวจ (เหมือนเสาร์)
+    const nPunch = ins.length + outs.length;
+    if (!sat && nPunch >= 1 && nPunch <= 3 && isPaydayPending(date)) {
+      res.needsReview = false;
+      res.reason = PAYDAY_PENDING_NOTE;
+    }
     rows.push({
       date,
       deviceUid: devUid,
       deviceName: devName,
       empCode,
-      ...assignPunches(ins, outs, sat),
+      ...res,
     });
   }
 
@@ -500,6 +543,11 @@ export function punchesToRows(punches, dbMap, dates, activeCodes) {
         if (mids[0]) res.lunchOut = mids[0];
         if (mids[1]) res.lunchIn = mids[1];
         res.reason = `สแกน ${pts.length} ครั้ง (${pts.join(", ")}) — ไม่ครบ 4 จุด กรุณาตรวจ`;
+        // 🆕 วันเงินเดือนออก ดึงระหว่างวัน → ยังไม่ต้องตรวจ จ่ายตามเวลาเช้าไปก่อน
+        if (isPaydayPending(date)) {
+          res.needsReview = false;
+          res.reason = PAYDAY_PENDING_NOTE;
+        }
       }
 
       rows.push({ date, deviceUid: uid, deviceName: "", empCode, ...res });
