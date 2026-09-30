@@ -28,7 +28,7 @@ export const HR_NOTE_PRESETS = [
 export const PRESET_GROUPS = [
   { key: "paid",   title: "🟢 ลา–จ่ายเต็มวัน",  hint: "กดแล้วกดบันทึกได้เลย ไม่ต้องกรอกเวลา" },
   { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก (เช้า 08:00–12:00 · บ่าย 13:00–17:00 คิดสายให้)" },
-  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง + กรอกเวลาครึ่งที่มา (คิดสายให้) · ออกระหว่างวัน=ใส่ช่องหักเพิ่ม" },
+  { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง + กรอกเวลาครึ่งที่มา (คิดสายให้) · ออกระหว่างวัน=ใส่เวลาเข้า+เวลาออก ระบบจ่ายตามชั่วโมงเอง (ไม่ต้องใส่หักเพิ่ม)" },
   { key: "other",  title: "🟠 อื่นๆ",            hint: "" },
 ];
 
@@ -150,8 +150,10 @@ export function deriveFromNote({ note, times, empCode, workDate }) {
 
   const amFilled = !!am_in && !!am_out;
   const pmFilled = !!pm_in && !!pm_out;
+  // 🆕 30 ก.ย.69 ออกระหว่างวัน = มีแค่เวลาเข้า + เวลาออก (ช่องพักออก หรือ ออกเย็น) ก็พอ ไม่ต้องครบ 4 จุด
+  const midLeaveDone = isMidLeave && !!am_in && (!!am_out || !!pm_out);
   const isDone = (amFilled && pmFilled) || isFullDayAbsence || isHalfAbsent ||
-    (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt;
+    (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
 
   return {
     clearTimes: isFullDayAbsence,
