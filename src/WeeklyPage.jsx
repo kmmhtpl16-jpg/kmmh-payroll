@@ -853,12 +853,16 @@ export default function WeeklyPage({ role }) {
 
       {/* สิ้นเดือน */}
       {!loading && payrolls.length > 0 && (() => {
-        const meRows    = sortByEmpCode(payrolls).map(r => ({
+        const meRowsAll = sortByEmpCode(payrolls).map(r => ({
           record: r, workDays:0, wage:0, extra:0,
           advAmt: getEmpSaturdayTotal(r), advItems: [],
           income_items: (otherItemsByEmp[r.employee_id] || []).filter(it => it.disburse_on !== "saturday"),
           toPay:  getMonthEndPay(r),
         }));
+        // 1 ต.ค.69: คนที่เคลียลาออกไปแล้ว (มีใบลาออก) และสิ้นเดือนไม่มียอดต้องจ่าย → ไม่ต้องโชว์/ไม่ใส่ในใบเบิกสิ้นเดือน
+        //   (เคสพี ก.ย.69: ค่าเที่ยว 410 จ่ายไปกับใบลาออกแล้ว แต่ใบสิ้นเดือนยังมีบรรทัดค่าเที่ยวซ้ำ ทำให้การ์ดตรวจค่าเที่ยวเห็นเป็น 820)
+        const meHidden = meRowsAll.filter(x => resignVs[x.record.employee_id] && Math.abs(x.toPay) < 1);
+        const meRows   = meRowsAll.filter(x => !meHidden.includes(x));
         const voucherMe  = vouchers["month_end"];
         const statusInfo = voucherMe ? STATUS_LABEL[voucherMe.status] : null; const meCollapsed = collapsed["month_end"] !== undefined ? collapsed["month_end"] : (voucherMe?.status === "approved");
 
@@ -939,6 +943,9 @@ export default function WeeklyPage({ role }) {
               </table>
             </div>
 
+            {meHidden.length > 0 && <div style={{ fontSize:12, color:"#64748b", padding:"6px 10px" }}>
+              ไม่แสดง {meHidden.length} คนที่เคลียลาออกแล้ว (ไม่มียอดค้างจ่ายสิ้นเดือน): {meHidden.map(x => x.record.employees?.nickname).join(", ")}
+            </div>}
             </div>{!meCollapsed && voucherMe && <VoucherInfo voucher={voucherMe} />}
             {!meCollapsed && <VoucherActions role={role} cycleKey="month_end" voucher={voucherMe} rows={meRows} locked={period?.is_closed}
               totalPay={monthEndTotal} submitting={submitting} approving={approving}
