@@ -74,8 +74,8 @@ export default function AnnualSummaryPage({ role }){
   const [cView,setCView]     = useState("year");
   const [cStatusF,setCStatusF]=useState("active");
   const [cq,setCq]           = useState("");
-  const [slip,setSlip]       = useState(null);   // ใบสรุปรายเดือน { emp, month } — เปิดจากช่องตัวเลขในมุมแยกรายเดือน (เจ้าของเท่านั้น)
-  const canSlip = role==="owner";
+  const [slip,setSlip]       = useState(null);   // ใบสรุปรายเดือน { emp, month } — เปิดจากช่องตัวเลขในมุมแยกรายเดือน (เจ้าของ + HR · เจ้าของเคาะ 2 ต.ค. 69)
+  const canSlip = role==="owner" || role==="hr";
 
   useEffect(()=>{ loadYear(year); /* eslint-disable-next-line */ }, [year]);
 
