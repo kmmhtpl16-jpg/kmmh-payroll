@@ -69,9 +69,7 @@ export default function InsurancePage({ role }) {
       // permanent employees (รวมที่ลาออกแล้ว เพื่อดูประวัติได้)
       const { data: emps, error: e1 } = await supabase
         .from("employees")
-        .select("id, emp_code, nickname, full_name, insurance_level, permanent_start_date, resigned_date")
-        .eq("emp_type", "permanent")
-        .neq("insurance_level", "none")
+        .select("id, emp_code, nickname, full_name, emp_type, insurance_level, permanent_start_date, resigned_date")
         .order("emp_code");
       if (e1) throw e1;
 
@@ -95,7 +93,12 @@ export default function InsurancePage({ role }) {
         bal[r.employee_id] = (bal[r.employee_id] || 0) + Number(r.amount);
       });
 
-      setEmployees(emps || []);
+      // 2 ต.ค. 69: โชว์คนประจำที่มีระดับประกัน + ทุกคนที่ยังมียอดค้างในกระปุก
+      //   (เคสต้อม: เปลี่ยนเป็นทดลองงานรอบใหม่ ระดับประกัน none แต่ยังมียอดรอบเดิม 1,200 ต้องคืน)
+      const shown = (emps || []).filter(e =>
+        (e.emp_type === "permanent" && e.insurance_level !== "none") ||
+        Math.abs(bal[e.id] || 0) > 0.001);
+      setEmployees(shown);
       setBalances(bal);
       setHistory(ledger || []);
       setPeriods(pp || []);
@@ -316,7 +319,7 @@ export default function InsurancePage({ role }) {
                     {isResigned && <span className="ins-badge ins-badge--resigned">ลาออก</span>}
                   </td>
                   <td>
-                    <span className="ins-level">฿{emp.insurance_level}/เดือน</span>
+                    <span className="ins-level">{emp.insurance_level === "none" ? "ไม่หักแล้ว" : `฿${emp.insurance_level}/เดือน`}</span>
                   </td>
                   <td className="ins-date">{fmtDate(emp.permanent_start_date)}</td>
                   <td className="ins-col-right">
