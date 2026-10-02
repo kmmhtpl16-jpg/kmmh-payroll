@@ -728,7 +728,26 @@ async function syncInsuranceDeposit(periodId, year, month, results) {
     if (error) throw new Error("สร้าง deposit ประกันงานไม่สำเร็จ: " + error.message);
   }
 
-  return { created: toInsert.length, skipped: results.length - toInsert.length };
+  // 🔧 v7.7 (2 ต.ค. 69) — ลบ deposit อัตโนมัติของงวดนี้ ที่คิดใหม่แล้ว "ไม่หักประกันงาน" (job_insurance = 0)
+  //   เคยเกิด 3 ครั้ง: โด้ มิ.ย. / พี ก.ย. (ลาออกกลางเดือน) · ต้อม ต.ค. (เปลี่ยนเป็นทดลองงาน)
+  //   คิดเงินเดือนรอบแรกหัก 200 → ลง deposit → คิดใหม่ได้ 0 แต่ deposit ค้าง → กระปุกโป่ง ปุ่ม "คืน" คืนเกิน
+  //   ลบเฉพาะแถวที่ระบบลงเอง (note ขึ้นต้น "หักประกันงาน (อัตโนมัติ") ของคนที่อยู่ในผลคำนวณรอบนี้
+  const zeroIds = results.filter(r => Number(r.job_insurance || 0) <= 0 && alreadyHas.has(r.employee_id)).map(r => r.employee_id);
+  let removed = 0;
+  if (zeroIds.length) {
+    const { data: del, error: delErr } = await supabase
+      .from("insurance_ledger")
+      .delete()
+      .eq("period_id", periodId)
+      .eq("entry_type", "deposit")
+      .like("note", "หักประกันงาน (อัตโนมัติ%")
+      .in("employee_id", zeroIds)
+      .select("id");
+    if (delErr) throw new Error("ลบ deposit ประกันงานที่ไม่ได้หักจริงไม่สำเร็จ: " + delErr.message);
+    removed = (del || []).length;
+  }
+
+  return { created: toInsert.length, removed, skipped: results.length - toInsert.length };
 }
 
 // ════════════════════════════════════════════════════════════
