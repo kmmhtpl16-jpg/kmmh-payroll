@@ -144,7 +144,7 @@ export default function AnnualSummaryPage({ role }){
 
       const rowsY=emps.map(e=>{
         const a=aggY[e.emp_code], b=lb[e.id]||{};
-        const isTrial=(e.emp_type==="trial" && !e.permanent_start_date);
+        const isTrial=(e.is_active && e.emp_type==="trial" && !e.permanent_start_date); // คนลาออกแล้ว (is_active=false) ไม่นับเป็นทดลองงาน
         let days_left=null, due=null;
         if(isTrial && e.trial_start_date){
           const t=pd(e.trial_start_date);
