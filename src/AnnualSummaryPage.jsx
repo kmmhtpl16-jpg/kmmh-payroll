@@ -236,18 +236,18 @@ export default function AnnualSummaryPage({ role }){
     const cBadge=r=> r.is_trial&&r.days_left!=null?'<span class="tbadge'+(r.days_left<=URGENT_DAYS?' urgent':'')+'">ทดลอง · เหลือ '+r.days_left+' วัน</span>':'';
 
     if(cView==="year"){
-      const thead='<tr><th class="l">รหัส</th><th class="l">ชื่อเล่น</th>'+mets.map(m=>'<th class="bl">'+m.label+'</th>').join("")+'</tr>';
+      const thead='<tr><th class="l">รหัส</th><th class="l nm">ชื่อเล่น</th>'+mets.map(m=>'<th class="bl">'+m.label+'</th>').join("")+'</tr>';
       const tot={}; mets.forEach(m=>tot[m.key]=0);
       const body=rows.map(r=>{
         const cells=mets.map(m=>{ let v=0; MONTHS.forEach(mm=> v+=getVal(getM(r.emp_code,mm),m.key)); tot[m.key]+=v;
           return '<td class="bl '+(m.unit==="money"?"money":"")+'">'+fmtVal(v,m.unit)+'</td>'; }).join("");
-        return '<tr class="'+(r.is_trial?"trial":(r.is_active?"":"row-off"))+'"><td class="l" style="color:#94a3b8">'+r.emp_code+'</td><td class="l"><b>'+r.nickname+'</b>'+cBadge(r)+'</td>'+cells+'</tr>';
+        return '<tr class="'+(r.is_trial?"trial":(r.is_active?"":"row-off"))+'"><td class="l" style="color:#94a3b8">'+r.emp_code+'</td><td class="l nm"><b>'+r.nickname+'</b>'+cBadge(r)+'</td>'+cells+'</tr>';
       }).join("");
-      const foot='<tr class="tfoot"><td class="l" colspan="2">รวมทั้งหมด</td>'+mets.map(m=>'<td class="bl '+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key],m.unit)+'</td>').join("")+'</tr>';
+      const foot='<tr class="tfoot"><td class="l nm" colspan="2">รวมทั้งหมด</td>'+mets.map(m=>'<td class="bl '+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key],m.unit)+'</td>').join("")+'</tr>';
       return '<table>'+'<thead>'+thead+'</thead><tbody>'+body+foot+'</tbody></table>';
     }
     // แยกรายเดือน
-    const r1='<tr><th class="l" rowspan="2">รหัส</th><th class="l" rowspan="2">ชื่อเล่น</th>'
+    const r1='<tr><th class="l" rowspan="2">รหัส</th><th class="l nm" rowspan="2">ชื่อเล่น</th>'
       +mets.map(m=>'<th class="grpc" colspan="'+(MONTHS.length+1)+'">'+m.label+'</th>').join("")+'</tr>';
     const r2='<tr>'+mets.map(m=>MONTHS.map((mm,i)=>'<th class="sub'+(i===0?' bl':'')+'">'+TH_MONTH[mm]+' '+String(Y+543).slice(-2)+'</th>').join("")+'<th class="sub" style="color:#1e3a5f">รวม</th>').join("")+'</tr>';
     const tot={}; mets.forEach(m=>{ tot[m.key]={}; MONTHS.forEach(mm=>tot[m.key][mm]=0); tot[m.key].sum=0; });
@@ -265,9 +265,9 @@ export default function AnnualSummaryPage({ role }){
         tot[m.key].sum+=sum;
         const split=(tS>0&&pS>0)?'<span class="sp-t">'+fmtVal(tS,m.unit)+'</span><span class="sp-plus">+</span><span class="sp-p">'+fmtVal(pS,m.unit)+'</span>':fmtVal(sum,m.unit);
         return mc+'<td class="'+(m.unit==="money"?"money ":"")+'" style="font-weight:700">'+split+'</td>'; }).join("");
-      return '<tr class="'+(r.is_trial?"trial":(r.is_active?"":"row-off"))+'"><td class="l" style="color:#94a3b8">'+r.emp_code+'</td><td class="l"><b>'+r.nickname+'</b>'+cBadge(r)+'</td>'+cells+'</tr>';
+      return '<tr class="'+(r.is_trial?"trial":(r.is_active?"":"row-off"))+'"><td class="l" style="color:#94a3b8">'+r.emp_code+'</td><td class="l nm"><b>'+r.nickname+'</b>'+cBadge(r)+'</td>'+cells+'</tr>';
     }).join("");
-    const foot='<tr class="tfoot"><td class="l" colspan="2">รวมทั้งหมด</td>'+mets.map(m=>MONTHS.map((mm,i)=>'<td class="'+(i===0?"bl ":"")+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key][mm],m.unit)+'</td>').join("")+'<td class="'+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key].sum,m.unit)+'</td>').join("")+'</tr>';
+    const foot='<tr class="tfoot"><td class="l nm" colspan="2">รวมทั้งหมด</td>'+mets.map(m=>MONTHS.map((mm,i)=>'<td class="'+(i===0?"bl ":"")+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key][mm],m.unit)+'</td>').join("")+'<td class="'+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key].sum,m.unit)+'</td>').join("")+'</tr>';
     return '<table><thead>'+r1+r2+'</thead><tbody>'+body+foot+'</tbody></table>';
   },[loading,err,db,sel,cView,cStatusF,cq,year]);
 
@@ -382,6 +382,9 @@ const CSS = `
 .asum .seg button{ padding:7px 14px; border:none; background:#fff; cursor:pointer; font-weight:600; font-size:13px; color:#475569; }
 .asum .seg button.on{ background:#2563eb; color:#fff; }
 .asum .tblwrap{ overflow-x:auto; }
+/* 2 ต.ค. 69 เจ้าของ: เลื่อนตารางไปทางขวาแล้วไม่เห็นชื่อ → ตรึงช่องชื่อไว้ซ้ายสุด */
+.asum .nm{ position:sticky; left:0; z-index:1; background:#fff; box-shadow:2px 0 0 #e2e8f0; }
+.asum th.nm{ background:#f8fafc; z-index:2; } .asum tr.trial td.nm{ background:#fffdf5; } .asum .tfoot td.nm{ background:#f8fafc; } .asum tbody tr.main:hover td.nm{ background:#f8fafc; }
 .asum table{ width:100%; border-collapse:collapse; font-size:13px; white-space:nowrap; }
 .asum th{ background:#f8fafc; text-align:right; padding:9px 10px; border-bottom:2px solid #e2e8f0; font-weight:700; color:#334155; }
 .asum th.l,.asum td.l{ text-align:left; } .asum th.sortable{ cursor:pointer; } .asum th.sortable:hover{ background:#eef2f7; }
