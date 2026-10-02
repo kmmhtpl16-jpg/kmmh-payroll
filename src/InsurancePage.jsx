@@ -93,11 +93,11 @@ export default function InsurancePage({ role }) {
         bal[r.employee_id] = (bal[r.employee_id] || 0) + Number(r.amount);
       });
 
-      // 2 ต.ค. 69: โชว์คนประจำที่มีระดับประกัน + ทุกคนที่ยังมียอดค้างในกระปุก
-      //   (เคสต้อม: เปลี่ยนเป็นทดลองงานรอบใหม่ ระดับประกัน none แต่ยังมียอดรอบเดิม 1,200 ต้องคืน)
+      // 2 ต.ค. 69: โชว์คนประจำที่มีระดับประกัน + ทุกคนที่เคยมีรายการในกระปุก (ดูประวัติ/คืนยอดค้างได้)
+      //   (เคสต้อม: เปลี่ยนเป็นทดลองงานรอบใหม่ ระดับประกัน none แต่มีประวัติรอบเดิม และเคยค้างคืน 1,200)
+      const hasLedger = new Set((ledger || []).map(r => r.employee_id));
       const shown = (emps || []).filter(e =>
-        (e.emp_type === "permanent" && e.insurance_level !== "none") ||
-        Math.abs(bal[e.id] || 0) > 0.001);
+        (e.emp_type === "permanent" && e.insurance_level !== "none") || hasLedger.has(e.id));
       setEmployees(shown);
       setBalances(bal);
       setHistory(ledger || []);
@@ -310,6 +310,7 @@ export default function InsurancePage({ role }) {
             {employees.map(emp => {
               const bal = balances[emp.id] || 0;
               const isResigned = !!emp.resigned_date;
+              const stopped = !isResigned && emp.insurance_level === "none";   // ยังทำงาน แต่ไม่หักประกันแล้ว (เช่น ต้อม รอบทดลองงานใหม่)
 
               return (
                 <tr key={emp.id} className={isResigned ? "ins-row--resigned" : ""}>
@@ -328,8 +329,14 @@ export default function InsurancePage({ role }) {
                     </span>
                   </td>
                   <td>
-                    {!isResigned && (
+                    {!isResigned && !stopped && (
                       <span className="ins-badge ins-badge--ok">กำลังสะสม</span>
+                    )}
+                    {stopped && bal === 0 && (
+                      <span className="ins-badge ins-badge--done">คืนแล้ว · หยุดหัก</span>
+                    )}
+                    {stopped && bal > 0 && (
+                      <span className="ins-badge ins-badge--warn">ค้างคืน</span>
                     )}
                     {isResigned && bal === 0 && (
                       <span className="ins-badge ins-badge--done">คืนแล้ว</span>
@@ -341,7 +348,11 @@ export default function InsurancePage({ role }) {
                   <td>
                     <div className="ins-actions">
                       <button className="ins-btn ins-btn--ghost" onClick={() => openHistory(emp)}>ประวัติ</button>
-                      {!isResigned && (
+                      {stopped && (
+                        <button className="ins-btn ins-btn--danger" onClick={() => openRefund(emp)}
+                          disabled={bal <= 0}>คืน</button>
+                      )}
+                      {!isResigned && !stopped && (
                         <>
                           <button className="ins-btn ins-btn--primary" onClick={() => openBackfill(emp)}>+ เพิ่ม</button>
                           <button className="ins-btn ins-btn--secondary" onClick={() => openWithdraw(emp)}
