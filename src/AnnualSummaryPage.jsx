@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient";
+import MonthSlip from "./MonthSlip";
 
 const TH_MONTH = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 const PROBATION_DAYS = 120, URGENT_DAYS = 15;
@@ -73,6 +74,8 @@ export default function AnnualSummaryPage({ role }){
   const [cView,setCView]     = useState("year");
   const [cStatusF,setCStatusF]=useState("active");
   const [cq,setCq]           = useState("");
+  const [slip,setSlip]       = useState(null);   // ใบสรุปรายเดือน { emp, month } — เปิดจากช่องตัวเลขในมุมแยกรายเดือน (เจ้าของเท่านั้น)
+  const canSlip = role==="owner";
 
   useEffect(()=>{ loadYear(year); /* eslint-disable-next-line */ }, [year]);
 
@@ -151,7 +154,7 @@ export default function AnnualSummaryPage({ role }){
           days_left=PROBATION_DAYS - dayDiff(REF,t);
           const dueD=new Date(t); dueD.setDate(dueD.getDate()+PROBATION_DAYS); due=beShort(dueD);
         }
-        return { emp_code:e.emp_code, nickname:e.nickname, full_name:e.full_name||"",
+        return { id:e.id, emp_code:e.emp_code, nickname:e.nickname, full_name:e.full_name||"",
           emp_type:e.emp_type, is_active:e.is_active, perm:e.permanent_start_date,
           is_trial:isTrial, days_left, due,
           sick_quota:b.sick_quota, sick_used:b.sick_used, personal_quota:b.personal_quota, personal_used:b.personal_used,
@@ -261,7 +264,9 @@ export default function AnnualSummaryPage({ role }){
           if(st==="mixed"){ const sp=splitMixed(r.perm,Y,mm,v); tS+=sp.t; pS+=sp.p;
             inner='<span class="sp-t">'+fmtVal(sp.t,m.unit)+'</span><span class="sp-plus">/</span><span class="sp-p">'+fmtVal(sp.p,m.unit)+'</span>'; }
           else if(st==="trial"){ tS+=v; } else { pS+=v; }
-          return '<td class="'+(i===0?"bl ":"")+(m.unit==="money"?"money":"")+(v===0?" muted":"")+scls+'">'+inner+tag+'</td>'; }).join("");
+          const hasRec=!!getM(r.emp_code,mm);
+          const clk=(canSlip&&hasRec)?' slipc" data-code="'+r.emp_code+'" data-m="'+mm+'" title="กดดูใบสรุปรายเดือน':'';
+          return '<td class="'+(i===0?"bl ":"")+(m.unit==="money"?"money":"")+(v===0?" muted":"")+scls+clk+'">'+inner+tag+'</td>'; }).join("");
         tot[m.key].sum+=sum;
         const split=(tS>0&&pS>0)?'<span class="sp-t">'+fmtVal(tS,m.unit)+'</span><span class="sp-plus">+</span><span class="sp-p">'+fmtVal(pS,m.unit)+'</span>':fmtVal(sum,m.unit);
         return mc+'<td class="'+(m.unit==="money"?"money ":"")+'" style="font-weight:700">'+split+'</td>'; }).join("");
@@ -269,7 +274,7 @@ export default function AnnualSummaryPage({ role }){
     }).join("");
     const foot='<tr class="tfoot"><td class="l nm" colspan="2">รวมทั้งหมด</td>'+mets.map(m=>MONTHS.map((mm,i)=>'<td class="'+(i===0?"bl ":"")+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key][mm],m.unit)+'</td>').join("")+'<td class="'+(m.unit==="money"?"money":"")+'">'+fmtVal(tot[m.key].sum,m.unit)+'</td>').join("")+'</tr>';
     return '<table><thead>'+r1+r2+'</thead><tbody>'+body+foot+'</tbody></table>';
-  },[loading,err,db,sel,cView,cStatusF,cq,year]);
+  },[loading,err,db,sel,cView,cStatusF,cq,year,canSlip]);
 
   // คลิกในตารางรายปี: หัวคอลัมน์=เรียง, แถว=กาง/พับ
   const onYearClick=e=>{
@@ -277,6 +282,14 @@ export default function AnnualSummaryPage({ role }){
     if(th){ const k=th.dataset.k; if(sortKey===k) setSortDir(d=>-d); else { setSortKey(k); setSortDir(1); } return; }
     const tr=e.target.closest("tr.main");
     if(tr){ const c=tr.dataset.code; setOpen(o=>({...o,[c]:!o[c]})); }
+  };
+  // คลิกช่องตัวเลขในมุมแยกรายเดือน → เปิดใบสรุปรายเดือนของคนนั้นเดือนนั้น
+  const onCustomClick=e=>{
+    if(!canSlip) return;
+    const td=e.target.closest("td[data-m]"); if(!td) return;
+    const r=db.rowsY.find(x=>x.emp_code===td.dataset.code); if(!r) return;
+    const mm=Number(td.dataset.m);
+    setSlip({ emp:{ id:r.id, emp_code:r.emp_code, nickname:r.nickname }, month:mm, agg:getM(r.emp_code,mm) });
   };
   const toggleMetric=k=>setSel(s=>{ const n=new Set(s); n.has(k)?n.delete(k):n.add(k); return n; });
   const years=[]; for(let yy=now.getFullYear(); yy>=2026; yy--) years.push(yy);
@@ -348,9 +361,10 @@ export default function AnnualSummaryPage({ role }){
             <span className="sw"></span> เดือนพื้นส้ม + คำว่า "ทดลอง" = เดือนที่ยังทดลองงาน · ช่อง "รวม" ถ้าปีนั้นคร่อมสองสถานะจะแยกเป็น{" "}
             <span className="sp-t">ทดลอง</span><span className="sp-plus">+</span><span className="sp-p">ประจำ</span>
           </div>
-          <div className="tblwrap" dangerouslySetInnerHTML={{__html:customHtml}} />
+          <div className="tblwrap" onClick={onCustomClick} dangerouslySetInnerHTML={{__html:customHtml}} />
         </div>
       )}
+      {slip && <MonthSlip emp={slip.emp} year={year} month={slip.month} agg={slip.agg} onClose={()=>setSlip(null)} />}
     </div>
   );
 }
@@ -382,6 +396,7 @@ const CSS = `
 .asum .seg button{ padding:7px 14px; border:none; background:#fff; cursor:pointer; font-weight:600; font-size:13px; color:#475569; }
 .asum .seg button.on{ background:#2563eb; color:#fff; }
 .asum .tblwrap{ overflow-x:auto; }
+.asum td.slipc{ cursor:pointer; } .asum td.slipc:hover{ background:#dbeafe; color:#1d4ed8; text-decoration:underline; }
 /* 2 ต.ค. 69 เจ้าของ: เลื่อนตารางไปทางขวาแล้วไม่เห็นชื่อ → ตรึงช่องชื่อไว้ซ้ายสุด */
 .asum .nm{ position:sticky; left:0; z-index:1; background:#fff; box-shadow:2px 0 0 #e2e8f0; }
 .asum th.nm{ background:#f8fafc; z-index:2; } .asum tr.trial td.nm{ background:#fffdf5; } .asum .tfoot td.nm{ background:#f8fafc; } .asum tbody tr.main:hover td.nm{ background:#f8fafc; }
