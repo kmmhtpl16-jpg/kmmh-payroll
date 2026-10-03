@@ -212,7 +212,8 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
       const { data, error } = await supabase.rpc("get_scanner_punches", { p_from: scanFrom, p_to: scanTo });
       if (error) throw error;
       setScanSync(data?.last_sync || null);
-      const activeCodes = new Set(employees.map((e) => e.emp_code));
+      // วันเริ่มงาน = วันเริ่มทดลองงาน (ถ้าไม่มีใช้วันบรรจุ) → ก่อนวันนั้นไม่ใส่แถว "ไม่สแกนเลย"
+      const activeCodes = new Map(employees.map((e) => [e.emp_code, e.trial_start_date || e.permanent_start_date || ""]));
       const { rows, skipped, sundays } = punchesToRows(data?.punches || [], deviceMap, dates, activeCodes);
       setSkippedRows(skipped);
       setFileName(scanImportName(scanFrom, scanTo));
@@ -264,7 +265,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     // 🆕 ดึงฐานค่าแรงมาด้วย → ใช้คำนวณ "ผลกระทบต่อเงิน" ให้เจ้าของดูก่อนอนุมัติคำขอแก้ไข
     const { data } = await supabase
       .from("employees")
-      .select("id, emp_code, nickname, full_name, emp_type, monthly_salary, daily_rate, probation")
+      .select("id, emp_code, nickname, full_name, emp_type, monthly_salary, daily_rate, probation, trial_start_date, permanent_start_date")
       .eq("is_active", true).order("emp_code");
     if (data) setEmployees(data);
   };

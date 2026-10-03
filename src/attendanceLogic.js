@@ -514,6 +514,13 @@ export function punchesToRows(punches, dbMap, dates, activeCodes) {
       const secs = (byKey[`${uid}|${date}`] || []).sort((a, b) => a - b);
       if (isSun) { if (secs.length) sundays++; continue; }
       if (!secs.length && !(activeCodes && activeCodes.has(empCode))) continue;
+      // 🆕 3 ต.ค. 69 — ยังไม่ถึงวันเริ่มงาน + ไม่มีสแกน → ไม่ใส่แถว "ไม่สแกนเลย"
+      //   (เคสหม่อง/ต้อม เริ่ม 2 ต.ค. แต่ดึง 1 ต.ค. แล้วได้แถว ขาด/ลา? มาด้วย)
+      //   activeCodes เป็น Map(emp_code → วันเริ่มงาน) ได้ · ถ้าเป็น Set เดิมทำงานเหมือนเดิม
+      if (!secs.length && typeof activeCodes?.get === "function") {
+        const start = activeCodes.get(empCode);
+        if (typeof start === "string" && start && date < start.slice(0, 10)) continue;
+      }
 
       // รวมกดซ้ำ: ห่างจากสแกนก่อนหน้า ≤ 2 นาที = ครั้งเดียว (เก็บครั้งแรก)
       const kept = [];
