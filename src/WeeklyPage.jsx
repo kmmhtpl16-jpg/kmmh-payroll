@@ -305,7 +305,7 @@ export default function WeeklyPage({ role }) {
           deduction_types: { name: `สายยกมา ${cr.carryLate} น.` } });
         // 🆕 v7.15 วันเงินเดือนออกจ่ายเต็มวันไปแล้ว แต่บ่ายลา/ขาด/ออกกลางวัน → หักคืนรอบเสาร์แรก
         if (cr.dayDeduct > 0) list.push({ employee_id: empId, amount: cr.dayDeduct, deduct_date: cr.date,
-          deduction_types: { name: `หักคืนค่าแรงวันเงินเดือนออก (ไม่ได้ทำ ${Math.round(cr.dayLoss * 100) / 100} วัน)` } });
+          deduction_types: { name: "หักคืนค่าแรงงวดก่อน" } });
       }
     }
     return list;
