@@ -1,6 +1,8 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.13
+// คำนวณเงินเดือน KMMH — v7.14
+// 🔧 v7.14 (3 ต.ค. 69) แยกการคิดยอดยกจากวันเงินเดือนออกเป็น paydayCarry() ให้รอบเสาร์ใช้ร่วม
+//   (ผลลัพธ์ทั้งเดือนเหมือน v7.13 ทุกบาท)
 // 🔧 v7.13 (30 ก.ย. 69) วันเงินเดือนออก ใช้กติกาเหมือนวันเสาร์:
 //   • เดือนนี้คิดสาย/OT ของวันเงินเดือนออกแค่ "ส่วนเช้า" (เวลาเข้า)
 //   • สาย/OT ช่วงเที่ยง-เย็นวันนั้น (HR/เครื่องเติมทีหลัง) → ยกไปหัก/จ่ายเดือนถัดไป
@@ -128,6 +130,23 @@ function paydaySplit(log, empCode) {
   const mLate = Math.min(late, m.lateMin);
   const mOt   = Math.min(ot, m.otHours);
   return { mLate, mOt, carryLate: late - mLate, carryOt: Math.max(0, ot - mOt), totalLate: late };
+}
+
+// 🆕 v7.14 (3 ต.ค. 69) — สายเที่ยง-เย็นของวันเงินเดือนออก "เดือนก่อน" ที่ยกมาหักเดือนนี้
+//   ใช้ร่วมกันทั้ง payrollCalc (ยอดทั้งเดือน) และ WeeklyPage (หักในรอบเสาร์แรกของเดือน)
+//   → คนรับเงินเสาร์ถูกหักวันเสาร์ ไม่ต้องรอสิ้นเดือน · ยอดทั้งเดือนเท่าเดิม (สิ้นเดือน = สุทธิ − เสาร์)
+//   คืน { carryLate, carryOt, deduct } · ขาดงานเต็มวัน = ไม่ยก
+export function paydayCarry(ppl, empCode, probation, hourlyRate) {
+  const none = { carryLate: 0, carryOt: 0, deduct: 0 };
+  if (!ppl) return none;
+  const note = ppl.hr_note || "";
+  if (/ขาด/.test(note) && !/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(note)) return none;
+  const sp = paydaySplit(ppl, empCode);
+  const rateTag = (probation && !/แจ้งล่วงหน้า/.test(note)) ? 5 : 1;
+  const deduct = sp.carryLate > 0
+    ? Math.max(0, calcLateDeduction(sp.totalLate, rateTag, hourlyRate) - calcLateDeduction(sp.mLate, rateTag, hourlyRate))
+    : 0;
+  return { carryLate: sp.carryLate, carryOt: sp.carryOt, deduct };
 }
 
 // deduction_type_id ของ "เบิกเงินสด" — แยกออกจาก other_deduct ไปอยู่ใน advance_total
@@ -449,23 +468,16 @@ export async function calcPayroll(year, month) {
 
     // 🆕 v7.13 ยกสาย/OT เที่ยง-เย็นของวันเงินเดือนออกเดือนก่อนมาคิดเดือนนี้
     const ppl = prevPaydayLogs.find(l => l.employee_id === emp.id);
-    const pplNote = ppl?.hr_note || "";
-    const pplAbsent = /ขาด/.test(pplNote) && !/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(pplNote);
-    if (ppl && !pplAbsent) {
-      const sp = paydaySplit(ppl, emp.emp_code);
-      const hr = (isPerm ? dailyPerm : dailyTrial) / 8;
-      const rateTag = (emp.probation && !/แจ้งล่วงหน้า/.test(pplNote)) ? 5 : 1;
-      if (sp.carryLate > 0) {
-        payday_carry_late = sp.carryLate;
-        late_minutes += sp.carryLate;
-        // หักเฉพาะส่วนต่าง (ทั้งวัน − ส่วนเช้าที่หักไปแล้ว) → รวมสองเดือนเท่ากับหักทั้งวันครั้งเดียวเป๊ะ
-        late_deduct  += Math.max(0,
-          calcLateDeduction(sp.totalLate, rateTag, hr) - calcLateDeduction(sp.mLate, rateTag, hr));
-      }
-      if (sp.carryOt > 0) {
-        payday_carry_ot = sp.carryOt;
-        ot_hours += sp.carryOt;
-      }
+    const pc  = paydayCarry(ppl, emp.emp_code, emp.probation, (isPerm ? dailyPerm : dailyTrial) / 8);
+    if (pc.carryLate > 0) {
+      payday_carry_late = pc.carryLate;
+      late_minutes += pc.carryLate;
+      // หักเฉพาะส่วนต่าง (ทั้งวัน − ส่วนเช้าที่หักไปแล้ว) → รวมสองเดือนเท่ากับหักทั้งวันครั้งเดียวเป๊ะ
+      late_deduct  += pc.deduct;
+    }
+    if (pc.carryOt > 0) {
+      payday_carry_ot = pc.carryOt;
+      ot_hours += pc.carryOt;
     }
 
     const base_wage   = parseFloat((trial_base + perm_base).toFixed(2));

@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
-import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { ResignSettleModal } from "./ResignSettlePanel"; import { calcLateDeduction, midLeaveFactor } from "./payrollCalc";
+import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { ResignSettleModal } from "./ResignSettlePanel"; import { calcLateDeduction, midLeaveFactor, paydayCarry } from "./payrollCalc"; import { paydayOf, PAYDAY_RULE_START } from "./attendanceLogic";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."]; const DOW_TH = ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."];
 
@@ -139,7 +139,7 @@ export default function WeeklyPage({ role }) {
   const [dedByType,    setDedByType]    = useState({});     // employee_id -> [{name, amount}] (หักจริงแยกตามแท็ก, ตัดเงินออก)
   const [lockModal,    setLockModal]    = useState(false);  // 🆕 เด้งถามล็อกยอดหลังอนุมัติใบสิ้นเดือน
   const [locking,      setLocking]      = useState(false);
-  const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [collapsed, setCollapsed] = useState({});
+  const [returnReason, setReturnReason] = useState(""); const [lateTagMap, setLateTagMap] = useState({}); const [carryMap, setCarryMap] = useState({}); const [collapsed, setCollapsed] = useState({});
 
   const loadAll = useCallback(async () => {
     setLoading(true); setMsg(null);
@@ -168,6 +168,27 @@ export default function WeeklyPage({ role }) {
         .from("attendance_logs").select("employee_id, work_date, hr_note, late_minutes, hr_extra_deduct, scan_am_in, scan_am_out, scan_pm_in, scan_pm_out")
         .in("employee_id", empIds).gte("work_date", dateFrom).lte("work_date", dateTo);
       setAllLogs(logs || []); const { data: _tags } = await supabase.from("late_tags").select("employee_id,tag_date,rate_per_minute").in("employee_id", empIds).gte("tag_date", dateFrom).lte("tag_date", dateTo); const _tm = {}; (_tags || []).forEach(t => { _tm[t.employee_id + "_" + t.tag_date] = t.rate_per_minute; }); setLateTagMap(_tm);
+
+      // 🆕 3 ต.ค. 69 — สายเที่ยง-เย็นของวันเงินเดือนออกเดือนก่อน → หักในรอบเสาร์แรก (คนรับเงินเสาร์)
+      //   ยอดทั้งเดือน (net_pay) หักไว้แล้วใน payrollCalc → สิ้นเดือน = สุทธิ − เสาร์ จึงไม่หักซ้ำ
+      {
+        const prevY = month === 1 ? year - 1 : year, prevM = month === 1 ? 12 : month - 1;
+        const prevPayday = paydayOf(prevY, prevM);
+        const cm = {};
+        if (prevPayday >= PAYDAY_RULE_START) {
+          const { data: ppl } = await supabase.from("attendance_logs")
+            .select("employee_id, work_date, hr_note, late_minutes, ot_hours, scan_am_in")
+            .in("employee_id", empIds).eq("work_date", prevPayday);
+          (ppl || []).forEach(l => {
+            const r = sorted.find(x => x.employee_id === l.employee_id);
+            const e = r?.employees || {};
+            const dayRate = e.emp_type === "permanent" && e.monthly_salary ? e.monthly_salary / dim : Number(e.daily_rate || 0);
+            const pc = paydayCarry(l, e.emp_code, e.probation, dayRate / 8);
+            if (pc.deduct > 0) cm[l.employee_id] = { ...pc, date: prevPayday };
+          });
+        }
+        setCarryMap(cm);
+      }
 
       const logDates = new Set((logs || []).map(l => l.work_date));
       setCycles(buildCyclesFromCalendar(year, month, logDates));
@@ -273,6 +294,13 @@ export default function WeeklyPage({ role }) {
       const ts  = (pr?.employees?.trial_start_date || "").slice(0, 10);
       if (fee > 0 && ts >= f && ts <= t) {
         list.push({ employee_id: empId, amount: fee, deduct_date: ts, deduction_types: { name: "ค่าสมัครงาน" } });
+      }
+      // 🆕 สายยกมาจากวันเงินเดือนออกเดือนก่อน → หักรอบเสาร์แรกของเดือน
+      const c0 = cycles.find(c => !c.isMonthEnd);
+      const cr = carryMap[empId];
+      if (cr && c0 && getCycleKey(c0) === getCycleKey(cycle) && pr?.employees?.pay_schedule !== "end_of_month") {
+        list.push({ employee_id: empId, amount: Math.round(cr.deduct * 100) / 100, deduct_date: cr.date,
+          deduction_types: { name: `สายยกมา ${cr.carryLate} น.` } });
       }
     }
     return list;
