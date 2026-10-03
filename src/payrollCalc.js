@@ -1,6 +1,9 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.14
+// คำนวณเงินเดือน KMMH — v7.15
+// 🔧 v7.15 (3 ต.ค. 69) วันเงินเดือนออก: ใบสิ้นเดือนทำก่อนเลิกงาน → ถ้าสแกนเข้าเช้าแล้ว เดือนนั้นนับเต็มวัน
+//   บ่ายลา/ขาด/ออกกลางวันทีหลัง → ส่วนที่ไม่ได้ทำ ยกไปหักเดือนถัดไปในช่อง leave_deduct (หักลา/ขาด)
+//   คนรับเสาร์ หักในรอบเสาร์แรกของเดือน (WeeklyPage) · ยอดเดือนที่จ่ายแล้วไม่ขยับแม้กดคำนวณใหม่
 // 🔧 v7.14 (3 ต.ค. 69) แยกการคิดยอดยกจากวันเงินเดือนออกเป็น paydayCarry() ให้รอบเสาร์ใช้ร่วม
 //   (ผลลัพธ์ทั้งเดือนเหมือน v7.13 ทุกบาท)
 // 🔧 v7.13 (30 ก.ย. 69) วันเงินเดือนออก ใช้กติกาเหมือนวันเสาร์:
@@ -136,17 +139,36 @@ function paydaySplit(log, empCode) {
 //   ใช้ร่วมกันทั้ง payrollCalc (ยอดทั้งเดือน) และ WeeklyPage (หักในรอบเสาร์แรกของเดือน)
 //   → คนรับเงินเสาร์ถูกหักวันเสาร์ ไม่ต้องรอสิ้นเดือน · ยอดทั้งเดือนเท่าเดิม (สิ้นเดือน = สุทธิ − เสาร์)
 //   คืน { carryLate, carryOt, deduct } · ขาดงานเต็มวัน = ไม่ยก
-export function paydayCarry(ppl, empCode, probation, hourlyRate) {
-  const none = { carryLate: 0, carryOt: 0, deduct: 0 };
+// 🆕 v7.15 — สัดส่วนวันที่ได้ค่าแรงจริงของ log หนึ่งวัน (ตรงกับลูปใน calcPayroll)
+//   ขาดงานครึ่งวัน 0.5 · ขาดงานเต็มวัน 0 · ออกระหว่างวัน ตามชั่วโมงจริง · อื่นๆ 1
+export function dayPayFactor(log) {
+  const note = log?.hr_note || "";
+  if (/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(note)) return 0.5;
+  if (/ขาด/.test(note)) return 0;
+  if (/ออกระหว่างวัน/.test(note)) return midLeaveFactor(log.scan_pm_out || log.scan_am_out, log.scan_am_out);
+  return 1;
+}
+
+// 🆕 v7.15 — วันเงินเดือนออกที่ "สแกนเข้าเช้าแล้ว" = เดือนนั้นจ่ายเต็มวันไปแล้ว (ใบสิ้นเดือนทำก่อนเลิกงาน)
+//   ถ้าบ่ายลา/ขาด/ออกกลางวันทีหลัง → ส่วนที่ไม่ได้ทำ ยกไปหักเดือนถัดไป (ไม่ไปแก้ยอดเดือนที่จ่ายแล้ว)
+export function isPaidFullPayday(log) {
+  return !!(log && isPayday(log.work_date) && log.scan_am_in);
+}
+
+export function paydayCarry(ppl, empCode, probation, hourlyRate, dayRate = 0) {
+  const none = { carryLate: 0, carryOt: 0, deduct: 0, dayLoss: 0, dayDeduct: 0 };
   if (!ppl) return none;
   const note = ppl.hr_note || "";
-  if (/ขาด/.test(note) && !/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(note)) return none;
+  // 🆕 v7.15 ส่วนวันที่ไม่ได้ทำ (บ่ายลา/ขาด/ออกกลางวัน) ของวันเงินเดือนออกที่จ่ายเต็มไปแล้ว
+  const dayLoss = isPaidFullPayday(ppl) ? Math.max(0, 1 - dayPayFactor(ppl)) : 0;
+  const dayDeduct = Math.round(dayLoss * dayRate * 100) / 100;
+  if (/ขาด/.test(note) && !/ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(note)) return { ...none, dayLoss, dayDeduct };
   const sp = paydaySplit(ppl, empCode);
   const rateTag = (probation && !/แจ้งล่วงหน้า/.test(note)) ? 5 : 1;
   const deduct = sp.carryLate > 0
     ? Math.max(0, calcLateDeduction(sp.totalLate, rateTag, hourlyRate) - calcLateDeduction(sp.mLate, rateTag, hourlyRate))
     : 0;
-  return { carryLate: sp.carryLate, carryOt: sp.carryOt, deduct };
+  return { carryLate: sp.carryLate, carryOt: sp.carryOt, deduct, dayLoss, dayDeduct };
 }
 
 // deduction_type_id ของ "เบิกเงินสด" — แยกออกจาก other_deduct ไปอยู่ใน advance_total
@@ -412,6 +434,8 @@ export async function calcPayroll(year, month) {
     let payday_pending_ot   = 0;
     let payday_carry_late   = 0; // 🆕 v7.13 ยกมาจากวันเงินเดือนออกเดือนก่อน
     let payday_carry_ot     = 0;
+    let payday_pending_day  = 0; // 🆕 v7.15 ส่วนวันที่ไม่ได้ทำของวันเงินเดือนออกเดือนนี้ → ไปหักเดือนหน้า
+    let payday_carry_day    = 0; // 🆕 v7.15 ยกมาจากวันเงินเดือนออกเดือนก่อน (หน่วย: วัน)
 
     for (const log of empLogs) {
       if (log.needs_hr_review) has_review = true;
@@ -421,7 +445,10 @@ export async function calcPayroll(year, month) {
       // 🆕 ขาดงานครึ่งวัน → หักครึ่งค่าแรง (นับ 0.5 วัน) — ต้องเช็คก่อน /ขาด/ เต็มวัน
       const isHalfAbsent = log.hr_note && /ขาดงานครึ่งวัน|ขาดครึ่งวัน/.test(log.hr_note);
       // 🆕 ขาดงาน(เต็มวัน) → ไม่นับวันทำ + ไม่จ่ายค่าแรงวันนั้น (ตัดวันออกเหมือนข้ามอาทิตย์) แต่ยังตัดเบี้ยขยัน
-      if (!isHalfAbsent && log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
+      // 🆕 v7.15 วันเงินเดือนออกที่สแกนเข้าเช้าแล้ว → เดือนนี้นับเต็มวัน (จ่ายไปแล้ว) ส่วนที่หายยกไปเดือนหน้า
+      const paidFullPayday = isPaidFullPayday(log);
+      if (paidFullPayday) payday_pending_day = Math.max(0, 1 - dayPayFactor(log));
+      if (!paidFullPayday && !isHalfAbsent && log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
 
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
@@ -435,7 +462,8 @@ export async function calcPayroll(year, month) {
       //   ยังหักสายแยกตามสแกนเข้าจริง + ตัดเบี้ยขยัน (นับเป็น has_leave ด้านล่าง)
       const isMidLeave = log.hr_note && /ออกระหว่างวัน/.test(log.hr_note);
       let dayFactor;
-      if (isHalfDay)        dayFactor = 0.5;
+      if (paidFullPayday)   dayFactor = 1;
+      else if (isHalfDay)   dayFactor = 0.5;
       else if (isMidLeave)  dayFactor = midLeaveFactor(log.scan_pm_out || log.scan_am_out, log.scan_am_out);
       else                  dayFactor = 1;
 
@@ -462,13 +490,21 @@ export async function calcPayroll(year, month) {
       late_deduct += parseFloat(log.hr_extra_deduct || 0);
 
       if (log.hr_note && /ลาครึ่งวัน/.test(log.hr_note)) leave_days += 0.5; // นับเฉพาะ "ลา" จริง (ไม่นับขาดงานครึ่งวัน)
-      if (log.hr_note && LEAVE_NOTE_RE.test(log.hr_note)) has_leave = true;
-      if (isMidLeave) has_leave = true; // 🆕 v7.9 ออกระหว่างวัน → ตัดเบี้ยขยันด้วย
+      // วันเงินเดือนออกที่จ่ายเต็มไปแล้ว ไม่ไปตัดเบี้ยขยันย้อนหลัง (จ่ายไปแล้วพร้อมเงินเดือน)
+      if (!paidFullPayday && log.hr_note && LEAVE_NOTE_RE.test(log.hr_note)) has_leave = true;
+      if (!paidFullPayday && isMidLeave) has_leave = true; // 🆕 v7.9 ออกระหว่างวัน → ตัดเบี้ยขยันด้วย
     }
 
     // 🆕 v7.13 ยกสาย/OT เที่ยง-เย็นของวันเงินเดือนออกเดือนก่อนมาคิดเดือนนี้
     const ppl = prevPaydayLogs.find(l => l.employee_id === emp.id);
-    const pc  = paydayCarry(ppl, emp.emp_code, emp.probation, (isPerm ? dailyPerm : dailyTrial) / 8);
+    // ค่าแรงต่อวันของเดือนก่อน (ประจำ = เงินเดือน ÷ วันของเดือนก่อน)
+    const prevDayRate = (isPerm && emp.monthly_salary && (!permStart || permStart <= prevPayday))
+      ? emp.monthly_salary / daysInMonth(prevY, prevM) : dailyTrial;
+    const pc  = paydayCarry(ppl, emp.emp_code, emp.probation, (isPerm ? dailyPerm : dailyTrial) / 8, prevDayRate);
+    if (pc.dayDeduct > 0) {
+      payday_carry_day = pc.dayLoss;
+      leave_deduct += pc.dayDeduct;   // ขึ้นในสลิปช่อง "หักลา / ขาด"
+    }
     if (pc.carryLate > 0) {
       payday_carry_late = pc.carryLate;
       late_minutes += pc.carryLate;
@@ -610,6 +646,9 @@ export async function calcPayroll(year, month) {
       payday_pending_ot,
       payday_carry_late,
       payday_carry_ot,
+      payday_pending_day,                       // 🆕 v7.15
+      payday_carry_day,
+      payday_carry_day_deduct: pc.dayDeduct,
     });
   }
 

@@ -406,6 +406,16 @@ export default function PayrollPage({ role }) {
                 ["ประกันสังคม (5%)",  `(${fmt(detail.social_security)})`],
                 ["ประกันงาน",         `(${fmt(detail.job_insurance)})`],
               ].map(([k,v]) => <Row key={k} label={k} value={v} red />)}
+              {detail.payday_carry_day_deduct > 0 && (
+                <div style={{ fontSize:12, color:"#64748b", margin:"2px 0 6px" }}>
+                  ↪ หักลา/ขาด รวมส่วนที่ไม่ได้ทำของวันเงินเดือนออกเดือนก่อน {Math.round(detail.payday_carry_day * 100) / 100} วัน = ({fmt(detail.payday_carry_day_deduct)}) — เดือนก่อนจ่ายเต็มวันไปแล้ว
+                </div>
+              )}
+              {detail.payday_pending_day > 0 && (
+                <div style={{ fontSize:12, color:"#b45309", margin:"2px 0 6px" }}>
+                  ⏭ วันเงินเดือนออกเดือนนี้ จ่ายเต็มวันไปแล้ว ส่วนที่ไม่ได้ทำ {Math.round(detail.payday_pending_day * 100) / 100} วัน ยกไปหักเดือนหน้า
+                </div>
+              )}
               {(detail.payday_carry_late > 0 || detail.payday_carry_ot > 0) && (
                 <div style={{ fontSize:12, color:"#64748b", margin:"2px 0 6px" }}>
                   ↪ รวมยอดยกมาจากวันเงินเดือนออกเดือนก่อน:

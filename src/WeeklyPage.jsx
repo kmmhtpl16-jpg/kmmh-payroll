@@ -177,14 +177,16 @@ export default function WeeklyPage({ role }) {
         const cm = {};
         if (prevPayday >= PAYDAY_RULE_START) {
           const { data: ppl } = await supabase.from("attendance_logs")
-            .select("employee_id, work_date, hr_note, late_minutes, ot_hours, scan_am_in")
+            .select("employee_id, work_date, hr_note, late_minutes, ot_hours, scan_am_in, scan_am_out, scan_pm_out")
             .in("employee_id", empIds).eq("work_date", prevPayday);
           (ppl || []).forEach(l => {
             const r = sorted.find(x => x.employee_id === l.employee_id);
             const e = r?.employees || {};
             const dayRate = e.emp_type === "permanent" && e.monthly_salary ? e.monthly_salary / dim : Number(e.daily_rate || 0);
-            const pc = paydayCarry(l, e.emp_code, e.probation, dayRate / 8);
-            if (pc.deduct > 0) cm[l.employee_id] = { ...pc, date: prevPayday };
+            const prevDim = new Date(prevY, prevM, 0).getDate();
+            const prevDayRate = e.emp_type === "permanent" && e.monthly_salary ? e.monthly_salary / prevDim : Number(e.daily_rate || 0);
+            const pc = paydayCarry(l, e.emp_code, e.probation, dayRate / 8, prevDayRate);
+            if (pc.deduct > 0 || pc.dayDeduct > 0) cm[l.employee_id] = { ...pc, date: prevPayday };
           });
         }
         setCarryMap(cm);
@@ -299,8 +301,11 @@ export default function WeeklyPage({ role }) {
       const c0 = cycles.find(c => !c.isMonthEnd);
       const cr = carryMap[empId];
       if (cr && c0 && getCycleKey(c0) === getCycleKey(cycle) && pr?.employees?.pay_schedule !== "end_of_month") {
-        list.push({ employee_id: empId, amount: Math.round(cr.deduct * 100) / 100, deduct_date: cr.date,
+        if (cr.deduct > 0) list.push({ employee_id: empId, amount: Math.round(cr.deduct * 100) / 100, deduct_date: cr.date,
           deduction_types: { name: `สายยกมา ${cr.carryLate} น.` } });
+        // 🆕 v7.15 วันเงินเดือนออกจ่ายเต็มวันไปแล้ว แต่บ่ายลา/ขาด/ออกกลางวัน → หักคืนรอบเสาร์แรก
+        if (cr.dayDeduct > 0) list.push({ employee_id: empId, amount: cr.dayDeduct, deduct_date: cr.date,
+          deduction_types: { name: `หักคืนค่าแรงวันเงินเดือนออก (ไม่ได้ทำ ${Math.round(cr.dayLoss * 100) / 100} วัน)` } });
       }
     }
     return list;
