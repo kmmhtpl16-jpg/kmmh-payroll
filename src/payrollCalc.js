@@ -451,6 +451,8 @@ export async function calcPayroll(year, month) {
       if (!paidFullPayday && !isHalfAbsent && log.hr_note && /ขาด/.test(log.hr_note)) { has_leave = true; continue; }
 
       const usePerm    = isPerm && (!permStartInMonth || log.work_date >= permStart);
+      // 🆕 v7.16 วันหยุดบริษัท → ทดลองงาน (ค่าแรงรายวัน) ไม่จ่าย ไม่นับวันทำ ไม่ตัดเบี้ยขยัน · ประจำจ่ายเหมือนเดิม
+      if (!usePerm && log.hr_note && /วันหยุดบริษัท/.test(log.hr_note)) continue;
       const dayRate    = usePerm ? dailyPerm : dailyTrial;
       const hourlyRate = dayRate / 8;
 
