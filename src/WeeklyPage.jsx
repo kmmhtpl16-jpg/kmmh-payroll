@@ -92,8 +92,10 @@ function buildCyclesFromCalendar(year, month, logDates) {
 //   ขาดงานเต็มวัน=0 · ออกระหว่างวัน=ตามชั่วโมงจริง (midLeaveFactor) · อื่นๆ=1
 //   หมายเหตุ: ครึ่งที่ใช้สิทธิ์ลา จ่ายที่สิ้นเดือนเอง (net − satTotal): ลาป่วย/ลากิจครึ่งวัน net=เต็มวัน
 //   → เสาร์จ่าย 0.5 (ครึ่งที่มา) สิ้นเดือนจ่ายอีก 0.5 (ครึ่งสิทธิ์); ขาดงานครึ่งวัน net=0.5 → สิ้นเดือน 0
-function cycleDayWeight(l) {
+function cycleDayWeight(l, emp) {
   const note = l.hr_note || "";
+  // 🆕 v7.16 วันหยุดบริษัท → ทดลองงานไม่จ่าย (ตรงกับ payrollCalc)
+  if (/วันหยุดบริษัท/.test(note) && emp && emp.emp_type !== "permanent") return 0;
   if (/ครึ่งวัน/.test(note)) return 0.5;   // ครึ่งวันทุกชนิด → จ่ายครึ่งที่มาทำงาน
   if (/ขาด/.test(note)) return 0;
   if (/ออกระหว่างวัน/.test(note)) return midLeaveFactor(l.scan_pm_out || l.scan_am_out, l.scan_am_out);
@@ -104,7 +106,7 @@ function calcCycleWageForEmployee(record, logsInCycle, WTAG) {
   const nonSun = logsInCycle.filter(
     l => new Date(l.work_date + "T00:00:00").getDay() !== 0
   );
-  const workDays = nonSun.reduce((s, l) => s + cycleDayWeight(l), 0);
+  const workDays = nonSun.reduce((s, l) => s + cycleDayWeight(l, record.employees), 0);
   if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
   const dailyRate = record.base_wage / record.work_days;
   const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; nonSun.forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = Math.round(dailyRate * workDays - _lateDed);
