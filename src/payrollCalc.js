@@ -1,6 +1,7 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.15
+// คำนวณเงินเดือน KMMH — v7.17
+// 🔧 v7.17 (9 ต.ค. 69) คืนค่าสมัครงาน 100 ตอนลาออก ให้คนที่ระบบหักเองด้วย (สถานะยังเป็น none)
 // 🔧 v7.15 (3 ต.ค. 69) วันเงินเดือนออก: ใบสิ้นเดือนทำก่อนเลิกงาน → ถ้าสแกนเข้าเช้าแล้ว เดือนนั้นนับเต็มวัน
 //   บ่ายลา/ขาด/ออกกลางวันทีหลัง → ส่วนที่ไม่ได้ทำ ยกไปหักเดือนถัดไปในช่อง leave_deduct (หักลา/ขาด)
 //   คนรับเสาร์ หักในรอบเสาร์แรกของเดือน (WeeklyPage) · ยอดเดือนที่จ่ายแล้วไม่ขยับแม้กดคำนวณใหม่
@@ -386,6 +387,22 @@ export async function calcPayroll(year, month) {
       (insBalanceExclMap[r.employee_id] || 0) + Number(r.amount || 0);
   });
 
+  // 🆕 v7.17 — ค่าสมัครงานที่ "หักไปแล้วในงวดก่อน" (ไว้คืนตอนลาออก)
+  //   ระบบหัก 100 ตอนเดือนแรกแต่ไม่เคยเปลี่ยน app_fee_status จาก none เป็น held
+  //   → เดิมคืนเฉพาะ held จึงไม่คืนให้คนที่ระบบหักเอง (เคสเจมส์ K022 · หม่อง K023 ออก 9 ต.ค.69)
+  const appFeePaidBefore = new Set();
+  {
+    let q = supabase.from("payroll_records")
+      .select("employee_id, period_id, app_fee_deduct")
+      .in("employee_id", empIds).gt("app_fee_deduct", 0);
+    const { data: feeRows, error: feeErr } = await q;
+    if (feeErr) throw new Error("โหลดประวัติค่าสมัครงานไม่ได้: " + feeErr.message);
+    (feeRows || []).forEach(r => {
+      if (curPeriodId && r.period_id === curPeriodId) return;   // งวดนี้คิดใหม่ด้านล่าง
+      appFeePaidBefore.add(r.employee_id);
+    });
+  }
+
   // 🆕 v7.13 — ส่วนเที่ยง-เย็นของ "วันเงินเดือนออก" เดือนก่อน → มาหัก/จ่ายเดือนนี้
   const prevY = month === 1 ? ce - 1 : ce;
   const prevM = month === 1 ? 12 : month - 1;
@@ -550,7 +567,10 @@ export async function calcPayroll(year, month) {
     const isFirstMonth         = trialStart >= dateFrom && trialStart <= dateTo;
     const isResigningThisMonth = resignDate  >= dateFrom && resignDate  <= dateTo;
     const app_fee_deduct = (isFirstMonth && emp.app_fee_status === "none") ? 100 : 0;
-    const app_fee_refund = (isResigningThisMonth && emp.app_fee_status === "held") ? 100 : 0;
+    // 🔧 v7.17 คืนตอนลาออก ถ้า: HR ตั้งว่าเก็บไว้แล้ว (held) · หรือระบบหักไปแล้วงวดก่อน · หรือหักในงวดนี้เอง
+    //   (คนเข้า-ออกในเดือนเดียวกัน = หัก 100 คืน 100 ให้เห็นทั้งสองบรรทัด) · คืนไปแล้ว (refunded) ไม่คืนซ้ำ
+    const app_fee_refund = (isResigningThisMonth && emp.app_fee_status !== "refunded" &&
+      (emp.app_fee_status === "held" || appFeePaidBefore.has(emp.id) || app_fee_deduct > 0)) ? 100 : 0;
 
     // ปกส. — ฐาน = "ค่าจ้างที่ได้รับจริงในเดือนนั้น"
     // 🔧 v7.12 ลาออกระหว่างเดือน → ฐาน = ค่าแรงวันที่ทำจริง + ค่าวันอาทิตย์ที่ได้

@@ -85,6 +85,7 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
   const [resignModal, setResignModal] = useState(null)   // { emp } | null
   const [resignDate, setResignDate] = useState('')
   const [insBalance, setInsBalance] = useState(null)     // ยอดประกันคงเหลือ (null = กำลังโหลด)
+  const [appFeePaid, setAppFeePaid] = useState(false)    // 🆕 ระบบเคยหักค่าสมัครงานในงวดใดงวดหนึ่ง
   const [resignSaving, setResignSaving] = useState(false)
 
   // 🆕 เชื่อมกับโปรแกรมประเมินพนักงานหน้าร้าน (staff_eval_roster) — ใช้ชุดข้อมูลพนักงานเดียวกัน
@@ -379,6 +380,10 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
     const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
     setResignDate(iso)
     setInsBalance(null)
+    setAppFeePaid(false)
+    // 🆕 ระบบหักค่าสมัครงานไปแล้วไหม (สถานะยังเป็น none ได้ เพราะระบบไม่เปลี่ยนเป็น held ให้)
+    supabase.from('payroll_records').select('id').eq('employee_id', emp.id).gt('app_fee_deduct', 0).limit(1)
+      .then(({ data }) => setAppFeePaid(!!(data && data.length)))
     // โหลดยอดประกันคงเหลือจากวิว v_insurance_balance
     const { data, error } = await supabase
       .from('v_insurance_balance')
@@ -427,7 +432,7 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
 
   // ── ยอดคืนใน popup ลาออก ──
   const resignEmp = resignModal?.emp
-  const appRefund = resignEmp?.app_fee_status === 'held' ? 100 : 0
+  const appRefund = (resignEmp?.app_fee_status === 'held' || (appFeePaid && resignEmp?.app_fee_status !== 'refunded')) ? 100 : 0
   const totalRefund = (insBalance || 0) + appRefund
 
   return (
