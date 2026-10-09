@@ -94,8 +94,9 @@ function buildCyclesFromCalendar(year, month, logDates) {
 //   → เสาร์จ่าย 0.5 (ครึ่งที่มา) สิ้นเดือนจ่ายอีก 0.5 (ครึ่งสิทธิ์); ขาดงานครึ่งวัน net=0.5 → สิ้นเดือน 0
 function cycleDayWeight(l, emp) {
   const note = l.hr_note || "";
-  // 🆕 v7.16 วันหยุดบริษัท → ทดลองงานไม่จ่าย (ตรงกับ payrollCalc)
-  if (/วันหยุดบริษัท/.test(note) && emp && emp.emp_type !== "permanent") return 0;
+  // 🔧 9 ต.ค. 69 วันหยุดบริษัท → รอบเสาร์ไม่จ่ายใครเลย (เจ้าของกำหนด: เงินวันหยุดจ่ายสิ้นเดือนเท่านั้น)
+  //   ประจำ: payrollCalc นับเป็นวันจ่าย → สิ้นเดือน (สุทธิ − ยอดเสาร์) จ่ายให้เอง · ทดลองงาน: ไม่จ่ายทั้งเดือน (v7.16)
+  if (/วันหยุดบริษัท/.test(note)) return 0;
   if (/ครึ่งวัน/.test(note)) return 0.5;   // ครึ่งวันทุกชนิด → จ่ายครึ่งที่มาทำงาน
   if (/ขาด/.test(note)) return 0;
   if (/ออกระหว่างวัน/.test(note)) return midLeaveFactor(l.scan_pm_out || l.scan_am_out, l.scan_am_out);
