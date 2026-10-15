@@ -115,7 +115,7 @@ export default function AnnualSummaryPage({ role }){
         const code=id2code[a.employee_id]; if(!code) return; const y0=aggY[code];
         const m=Number(String(a.work_date).slice(5,7)); const mm=ensureM(code,m);
         const present=a.scan_am_in?1:0;
-        const abs=a.hr_note==="ขาดงาน"?1:(a.hr_note==="ขาดงานครึ่งวัน"?0.5:0);
+        const abs=a.hr_note==="ขาดงาน"?1:((a.hr_note==="ขาดงานครึ่งวัน"||/ครึ่งวัน \+ ขาดครึ่งวัน$/.test(a.hr_note||""))?0.5:0);
         y0.present_days+=present; mm.present_days+=present;
         y0.absent_days+=abs;      mm.absent_days+=abs;
         y0.late_min+=(a.late_minutes||0); mm.late_min+=(a.late_minutes||0);

@@ -7,7 +7,7 @@
 // 🔑 ที่ต้องมี RPC เพราะการเปลี่ยนโน้ต "ขาด ↔ ลา" กระทบ 3 ตาราง ถ้าทำแยกแล้วพังกลางทาง สิทธิ์ลาจะค้าง
 import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-import { HR_NOTE_PRESETS, PRESET_GROUPS, impactOf, deriveFromNote, dayLabelTH } from "./hrNotePresets";
+import { HR_NOTE_PRESETS, PRESET_GROUPS, impactOf, deriveFromNote, dayLabelTH, baseNoteOf } from "./hrNotePresets";
 
 // bucket receipts เป็น private → ต้องขอ signed url ตอนกดดู (เก็บ path ลง DB เท่านั้น)
 async function signedUrl(path) {
@@ -48,7 +48,7 @@ async function compressImage(file, maxDim = 1200) {
 // ① ฟอร์ม HR กด "ขอแก้ไข"
 // ══════════════════════════════════════════════
 export function EditRequestModal({ log, emp, role, onClose, onSent }) {
-  const [note, setNote] = useState(log.hr_note || "");
+  const [note, setNote] = useState(baseNoteOf(log.hr_note));
   const [times, setTimes] = useState({
     scan_am_in: log.scan_am_in || "", scan_am_out: log.scan_am_out || "",
     scan_pm_in: log.scan_pm_in || "", scan_pm_out: log.scan_pm_out || "",
@@ -62,10 +62,10 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
 
   const d = deriveFromNote({ note, times, empCode: emp?.emp_code, workDate: log.work_date });
   const impact = impactOf({
-    emp, workDate: log.work_date, oldNote: log.hr_note, newNote: note,
+    emp, workDate: log.work_date, oldNote: log.hr_note, newNote: d.storedNote,
     oldLate: log.late_minutes, newLate: d.lateMinutes,
   });
-  const changed = note !== (log.hr_note || "") ||
+  const changed = d.storedNote !== (log.hr_note || "") ||
     d.times.scan_am_in !== (log.scan_am_in || "") || d.times.scan_am_out !== (log.scan_am_out || "") ||
     d.times.scan_pm_in !== (log.scan_pm_in || "") || d.times.scan_pm_out !== (log.scan_pm_out || "") ||
     (parseFloat(extraDeduct) || 0) !== (Number(log.hr_extra_deduct) || 0);
@@ -85,7 +85,7 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
       const { error } = await supabase.from("edit_requests").insert({
         target_table: "attendance_logs",
         target_id: log.id,
-        target_label: `${emp?.nickname || log.employees?.nickname || "-"} · ${dayLabelTH(log.work_date)} (${log.hr_note || "ไม่มีโน้ต"} → ${note || "-"})`,
+        target_label: `${emp?.nickname || log.employees?.nickname || "-"} · ${dayLabelTH(log.work_date)} (${log.hr_note || "ไม่มีโน้ต"} → ${d.storedNote || "-"})`,
         employee_id: log.employee_id,
         request_kind: "edit",
         old_data: {
@@ -95,7 +95,7 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
           hr_extra_deduct: log.hr_extra_deduct, hr_extra_note: log.hr_extra_note,
         },
         new_data: {
-          hr_note: note,
+          hr_note: d.storedNote,
           ...d.times,
           hr_extra_deduct: parseFloat(extraDeduct) || 0,
           hr_extra_note: extraNote || null,
@@ -144,7 +144,7 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 5 }}>
                   {items.map((p) => (
                     <button key={p.value} onClick={() => setNote(p.value)}
-                      style={{ ...st.preset, ...(note === p.value ? st.presetActive : {}) }}>
+                      style={{ ...st.preset, ...(baseNoteOf(note) === p.value ? st.presetActive : {}) }}>
                       {icon}{p.label}
                     </button>
                   ))}

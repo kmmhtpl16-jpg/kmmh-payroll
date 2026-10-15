@@ -27,12 +27,31 @@ export const HR_NOTE_PRESETS = [
 // กลุ่มปุ่ม (เรียงเป็นแถว/คอลัมน์ให้อ่านง่าย — สีเดียวกัน = ผลต่อเงินเหมือนกัน)
 export const PRESET_GROUPS = [
   { key: "paid",   title: "🟢 ลา–จ่ายเต็มวัน",  hint: "กดแล้วกดบันทึกได้เลย ไม่ต้องกรอกเวลา" },
-  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก (เช้า 08:00–12:00 · บ่าย 13:00–17:00 คิดสายให้)" },
+  { key: "half",   title: "🔵 ลาครึ่งวัน",       hint: "กรอกครึ่งที่มาทำงาน แล้วกดบันทึก (เช้า 08:00–12:00 · บ่าย 13:00–17:00 คิดสายให้) · ถ้าไม่ได้มาเลย ไม่ต้องกรอกเวลา → ระบบนับเป็นลาครึ่ง + ขาดครึ่ง (ได้ค่าแรงครึ่งวัน)" },
   { key: "deduct", title: "🔴 หักเงิน",          hint: "ขาดงาน=หักเต็มวัน · ครึ่งวัน=หักครึ่ง + กรอกเวลาครึ่งที่มา (คิดสายให้) · ออกระหว่างวัน=ใส่เวลาเข้า+เวลาออก ระบบจ่ายตามชั่วโมงเอง (ไม่ต้องใส่หักเพิ่ม)" },
   { key: "other",  title: "🟠 อื่นๆ",            hint: "" },
 ];
 
-export const presetOf = (note) => HR_NOTE_PRESETS.find((p) => p.value === note) || null;
+// 🆕 15 ต.ค.69 ลาครึ่งวัน แต่ "ไม่ได้มาทำงานเลย" (ไม่มีเวลาสแกน)
+//   = ใช้สิทธิ์ลาครึ่งวัน (ได้ค่าแรงครึ่ง) + ขาดงานอีกครึ่ง (ไม่ได้ค่าแรงครึ่ง)
+//   เคสหมิว 13 ต.ค.69: สิทธิ์ลากิจเหลือ 0.5 วัน ไม่มาทั้งวัน → เดิมกดลากิจครึ่งวันแล้วค้าง 🟡
+//   เก็บในโน้ตว่า "ลากิจครึ่งวัน + ขาดครึ่งวัน" → payrollCalc/รอบเสาร์อ่านคำว่า "ขาดครึ่งวัน" แล้วนับ 0.5 วันเอง
+export const NO_WORK_HALF_SUFFIX = " + ขาดครึ่งวัน";
+const NO_WORK_HALF_RE = / \+ ขาดครึ่งวัน$/;
+export const baseNoteOf = (note) => String(note || "").replace(NO_WORK_HALF_RE, "");
+export const isHalfLeaveNoWork = (note) => NO_WORK_HALF_RE.test(String(note || ""));
+
+export const presetOf = (note) => HR_NOTE_PRESETS.find((p) => p.value === baseNoteOf(note)) || null;
+
+// โน้ตที่จะเก็บจริง: ปุ่มลาครึ่งวัน + ไม่ได้กรอกเวลาเลยสักช่อง → ต่อท้าย " + ขาดครึ่งวัน"
+export function storedNoteOf(note, times) {
+  const base = baseNoteOf(note);
+  const p = presetOf(base);
+  const t = times || {};
+  const noTimes = !t.scan_am_in && !t.scan_am_out && !t.scan_pm_in && !t.scan_pm_out;
+  if (p && p.leaveType && p.half && noTimes) return base + NO_WORK_HALF_SUFFIX;
+  return base;
+}
 
 // ── น้ำหนักค่าแรงของวันนั้น (ตรงกับ payrollCalc v7.11) ──
 //   ขาดงานเต็มวัน = ไม่นับวัน (0) · ขาดครึ่งวัน = 0.5 · ลาทุกชนิด/วันหยุด/วันทำงานปกติ = 1
@@ -126,7 +145,12 @@ const to24h = (val) => {
 
 // ── คำนวณค่าที่จะเขียนลง DB จาก "โน้ตใหม่ + เวลาที่กรอก" (กติกาเดียวกับปุ่มแก้ไขของ HR) ──
 export function deriveFromNote({ note, times, empCode, workDate }) {
-  const p = presetOf(note);
+  const storedNote = storedNoteOf(note, {
+    scan_am_in: to24h(times.scan_am_in), scan_am_out: to24h(times.scan_am_out),
+    scan_pm_in: to24h(times.scan_pm_in), scan_pm_out: to24h(times.scan_pm_out),
+  });
+  const noWorkHalf = isHalfLeaveNoWork(storedNote);
+  const p = presetOf(storedNote);
   const isFullDayAbsence = !!(p && p.fullDay);
   const isHalfAbsent = !!(p && p.halfAbsent);
   const isHalfDayLeave = !!(p && p.leaveType && p.half);
@@ -153,13 +177,15 @@ export function deriveFromNote({ note, times, empCode, workDate }) {
   // 🆕 30 ก.ย.69 ออกระหว่างวัน = มีแค่เวลาเข้า + เวลาออก (ช่องพักออก หรือ ออกเย็น) ก็พอ ไม่ต้องครบ 4 จุด
   const midLeaveDone = isMidLeave && !!am_in && (!!am_out || !!pm_out);
   const isDone = (amFilled && pmFilled) || isFullDayAbsence || isHalfAbsent ||
-    (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
+    (isHalfDayLeave && (amFilled || pmFilled || noWorkHalf)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
 
   return {
     clearTimes: isFullDayAbsence,
     lateMinutes: isFullDayAbsence ? 0 : (isNormalNoOt ? 0 : (isMidLeave ? midLeaveLate : lateMin)),
     otHours: isFullDayAbsence ? 0 : ((isNormalNoOt || isMidLeave) ? 0 : otHours),
     isDone,
+    storedNote,
+    noWorkHalf,
     leaveType: p?.leaveType || null,
     leaveHalf: !!(p && p.half),
     needTimes: !isFullDayAbsence,

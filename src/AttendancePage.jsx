@@ -6,7 +6,7 @@ import { supabase } from "./supabaseClient";
 import ImportConflictModal from "./ImportConflictModal";
 // 🆕 22 ก.ย.69 ระบบ "ขอแก้ไข" — HR ขอ → เจ้าของอนุมัติ → ระบบแก้ให้ (ไม่ต้องแก้หลังบ้านอีก)
 import { EditRequestModal, EditRequestBar } from "./EditRequestPanel";
-import { HR_NOTE_PRESETS, PRESET_GROUPS } from "./hrNotePresets";
+import { HR_NOTE_PRESETS, PRESET_GROUPS, baseNoteOf, storedNoteOf, isHalfLeaveNoWork } from "./hrNotePresets";
 
 // ── ตัวช่วยเรื่องเดือน (แสดงเฉพาะเดือนที่เลือก) ──
 const TH_MONTHS = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
@@ -300,7 +300,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
       scan_am_out: log.scan_am_out || "",
       scan_pm_in: log.scan_pm_in || "",
       scan_pm_out: log.scan_pm_out || "",
-      hr_note: log.hr_note || "",
+      hr_note: baseNoteOf(log.hr_note),
       hr_extra_deduct: log.hr_extra_deduct != null ? String(log.hr_extra_deduct) : "",
       hr_extra_note: log.hr_extra_note || "",
     });
@@ -355,10 +355,12 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     let pm_out = to24h(editValues.scan_pm_out);
 
     const emp = employees.find(e => e.id === editRow.employee_id);
+    // โน้ตที่ผู้ใช้เลือก โดยตัดท้าย " + ขาดครึ่งวัน" ออก (กันพิมพ์คำเต็มเองในช่องพิมพ์เอง)
+    const noteBase = baseNoteOf(editValues.hr_note);
 
     // 🚚 ติดส่งสินค้า → มีแค่สแกนเข้าเช้า (ออกไปส่งของ) — กดปุ่มเดียวจบ จ่ายเต็มวัน
     //   คงเวลาเดิมไว้ (ไม่ล้าง) → ยังหักสายเช้าตามสแกนจริง
-    const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === editValues.hr_note);
+    const isDeliveryDuty = !!HR_NOTE_PRESETS.find(p => p.deliveryDuty && p.value === noteBase);
 
     // 🆕 29 ส.ค.69 — วันติดส่งสินค้าที่สแกน 2 ครั้ง (เช้าเข้าร้าน → กลับเข้าร้านตอนเย็น)
     //   เครื่องเรียงสแกนตามลำดับ จึงยัดสแกนที่ 2 ลงช่อง "พักออก" → ช่อง "ออกเย็น" ว่าง
@@ -372,17 +374,21 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     }
 
     // 🆕 ลา/ขาดทั้งวัน (ลาป่วย/ลากิจ/ขาดงาน/วันหยุด) → ไม่ต้องกรอกเวลา 4 จุด
-    const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === editValues.hr_note);
+    const fullDayNote = HR_NOTE_PRESETS.find(p => p.fullDay && p.value === noteBase);
     const isFullDayAbsence = !!fullDayNote;
 
     // 🆕 ขาดงานครึ่งวัน → มาทำงานจริงครึ่งวัน กรอกเวลาครึ่งที่มา ระบบหักครึ่งค่าแรง + คิดสายครึ่งนั้นให้
-    const halfAbsentPreset = HR_NOTE_PRESETS.find(p => p.halfAbsent && p.value === editValues.hr_note);
+    const halfAbsentPreset = HR_NOTE_PRESETS.find(p => p.halfAbsent && p.value === noteBase);
     const isHalfAbsent = !!halfAbsentPreset;
 
     // 🆕 ลาครึ่งวัน → ทำงานจริงครึ่งวัน กรอกแค่ครึ่งเดียว (เช้า หรือ บ่าย) ก็ครบ ปลด 🟡 ได้
     //   (ระบบจะหักค่าแรงครึ่งวันให้อัตโนมัติตอนคำนวณเงินเดือนใน payrollCalc.js)
-    const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === editValues.hr_note);
+    const leavePreset = HR_NOTE_PRESETS.find(p => p.leaveType && p.value === noteBase);
     const isHalfDayLeave = !!(leavePreset && leavePreset.half);
+    // 🆕 15 ต.ค.69 ลาครึ่งวันแต่ไม่ได้มาเลย (ไม่กรอกเวลาสักช่อง) = ลาครึ่ง + ขาดครึ่ง
+    //   โน้ตที่เก็บจริงจะเป็น "ลากิจครึ่งวัน + ขาดครึ่งวัน" → เงินเดือนนับ 0.5 วัน · ตัดสิทธิ์ลา 0.5
+    const storedNote = storedNoteOf(noteBase, { scan_am_in: am_in, scan_am_out: am_out, scan_pm_in: pm_in, scan_pm_out: pm_out });
+    const noWorkHalf = isHalfLeaveNoWork(storedNote);
 
     // 🆕 กันลาเกินสิทธิ์ — ด่านหลังสุด (ปุ่มถูกปิดแล้ว แต่ช่อง "พิมพ์เอง" ยังเขียนคำเดิมได้)
     if (leavePreset && editBal) {
@@ -416,7 +422,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     const { lateMin, otHours } = isHalfDayAny ? calcHalfDay(timeArgs) : calcDay(timeArgs);
 
     // 🔵 ทำงาน 1 วัน ไม่เอา OT/สาย → HR อนุมัติว่าเป็นวันทำงานปกติ (คงเวลาสแกน แต่ล้าง สาย/OT เป็น 0)
-    const isNormalNoOt = !!HR_NOTE_PRESETS.find(p => p.noOt && p.value === editValues.hr_note);
+    const isNormalNoOt = !!HR_NOTE_PRESETS.find(p => p.noOt && p.value === noteBase);
     // 🆕 v7.10 ออกระหว่างวัน → ไม่คิด "ออกก่อน 17:00" เป็นสาย (payrollCalc คิดค่าแรงตามชั่วโมงให้แล้ว)
     //   หักเฉพาะ "สายตอนเช้า" จริง (มาหลัง 08:00) เท่านั้น + ล้าง OT
     const isMidLeave = !!editValues.hr_note && /ออกระหว่างวัน/.test(editValues.hr_note);
@@ -429,7 +435,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     // "ตรวจเสร็จ" ถ้า: กรอกเวลาครบ 4 จุด / ลา-ขาดทั้งวัน / ลาครึ่งวันที่กรอกครึ่งเดียวครบ
     // 🆕 30 ก.ย.69 ออกระหว่างวัน = มีเวลาเข้า + เวลาออก (พักออก หรือ ออกเย็น) ก็ถือว่าตรวจเสร็จ
     const midLeaveDone = isMidLeave && am_in !== "" && (am_out !== "" || pm_out !== "");
-    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
+    const isDone = allFilled || isFullDayAbsence || isHalfAbsent || (isHalfDayLeave && (amFilled || pmFilled || noWorkHalf)) || isDeliveryDuty || isNormalNoOt || midLeaveDone;
 
     const { error } = await supabase
       .from("attendance_logs")
@@ -441,7 +447,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
         scan_pm_out: clearTimes ? null : (pm_out || null),
         late_minutes: clearTimes ? 0 : (isNormalNoOt ? 0 : (isMidLeave ? midLeaveLate : lateMin)),
         ot_hours: clearTimes ? 0 : ((isNormalNoOt || isMidLeave) ? 0 : otHours),
-        hr_note: editValues.hr_note || null,
+        hr_note: storedNote || null,
         hr_extra_deduct: parseFloat(editValues.hr_extra_deduct) || 0,
         hr_extra_note: editValues.hr_extra_note || null,
         needs_hr_review: isDone ? false : true,
@@ -459,7 +465,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
       let leaveSyncErr = null;
       // 🔑 22 ก.ย.69 โน้ตเปลี่ยน = ต้องถอนใบลาเดิมของวันนั้น + คืนสิทธิ์ก่อนเสมอ
       //   เดิมไม่มีขั้นนี้ → แก้ "ลาป่วย → ขาดงาน" แล้วสิทธิ์ลายังถูกตัดค้างอยู่ ต้องมาแก้หลังบ้านทุกครั้ง
-      const noteChanged = (editRow.hr_note || "") !== (editValues.hr_note || "");
+      const noteChanged = (editRow.hr_note || "") !== (storedNote || "");
       if (noteChanged) {
         const { error: revErr } = await supabase.rpc("revert_leave_of_day", {
           p_employee_id: editRow.employee_id,
@@ -493,7 +499,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
               hours: leavePreset.half ? 4 : null,
               is_within_quota: remain >= deductDays,
               deduct_amount: 0,
-              note: (editValues.hr_note || "") + " (จากบันทึกเวลา)",
+              note: (storedNote || "") + " (จากบันทึกเวลา)",
             });
             // ❗ ห้ามกลืน error เงียบ — เคส 7 ก.ค.69 RLS บล็อกแล้วไม่มีใครรู้ ต้องมาคีย์ซ้ำ
             if (leaveErr) throw new Error(leaveErr.message);
@@ -524,6 +530,8 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
         ? ` — ${editValues.hr_note} (ทั้งวัน) ปลด 🟡 แล้ว`
         : isHalfAbsent
         ? ` — ขาดงานครึ่งวัน ปลด 🟡 แล้ว (หักครึ่งค่าแรง${lateMin > 0 ? ` + สาย ${lateMin} น.` : " · ไม่มีสาย"})`
+        : (noWorkHalf && isDone)
+        ? ` — ${storedNote} ปลด 🟡 แล้ว (ได้ค่าแรงครึ่งวันจากสิทธิ์ลา · อีกครึ่งไม่ได้ค่าแรง · ตัดสิทธิ์ลา 0.5 วัน)`
         : (isHalfDayLeave && isDone)
         ? ` — ${editValues.hr_note} ปลด 🟡 แล้ว (จ่ายเต็มวัน · ลงหน้าการลาแล้ว${lateMin > 0 ? ` · สาย ${lateMin} น.` : ""})`
         : (isDone ? " — ปลด 🟡 แล้ว" : " (ยังไม่ครบ 4 จุด)");
