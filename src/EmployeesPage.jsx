@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 import { ResignSettleBanner, ResignSettleChip, ResignSettleModal, loadResignVouchers, SETTLE_WINDOW_DAYS } from './ResignSettlePanel'
+import BankAccountPanel from './BankAccountPanel'
 
 const COLORS = [
   { bg: '#E6F1FB', fg: '#0C447C' },
@@ -99,7 +100,16 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
   const [enrollPick, setEnrollPick] = useState({})     // { [prog]: true } ที่ติ๊ก
   const [enrollBusy, setEnrollBusy] = useState(false)
 
-  useEffect(() => { fetchEmployees(); fetchEvalRoster(); fetchProgStatus() }, [])
+  // 🆕 16ต.ค.69 ใบยืนยันเลขบัญชี (RPC bank_acc_list — เห็นแค่ 4 ตัวท้าย, เฉพาะเจ้าของ/HR)
+  const [bankMap, setBankMap] = useState({})    // { employee_id: row }
+  const [bankEmp, setBankEmp] = useState(null)
+  async function fetchBank() {
+    const { data, error } = await supabase.rpc('bank_acc_list')
+    if (error || !data) return
+    setBankMap(Object.fromEntries(data.map(r => [r.employee_id, r])))
+  }
+
+  useEffect(() => { fetchEmployees(); fetchEvalRoster(); fetchProgStatus(); fetchBank() }, [])
 
   // 🆕 25ก.ย.69 เคลียเงินพนักงานลาออก (payout_vouchers kind='resign')
   const [settleMap, setSettleMap] = useState({})    // { employee_id: voucher|null }
@@ -560,7 +570,23 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
                         {getInitials(e.nickname)}
                       </div>
                       <div>
-                        <div style={{ fontWeight: 500 }}>{e.nickname} — {e.full_name}</div>
+                        <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span>{e.nickname} — {e.full_name}</span>
+                          {(() => {
+                            const b = bankMap[e.id]
+                            const done = b?.pay_method && (b.pay_method === 'cash' || b.account_last4)
+                            const docsOk = b?.has_passbook && b?.has_signed
+                            return (
+                              <button onClick={() => setBankEmp(e)} title="หนังสือยืนยันหมายเลขบัญชี: กรอก · ปริ้น · แนบรูป"
+                                style={{ background: done ? (docsOk ? '#EAF3DE' : '#E6F1FB') : '#FBF3E6', color: done ? (docsOk ? '#27500A' : '#0C447C') : '#B26A00', border: 'none', borderRadius: 99, padding: '1px 8px', fontSize: 10.5, cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap' }}>
+                                🏦 {!done ? 'ยังไม่มีบัญชี'
+                                  : b.pay_method === 'cash' ? 'เงินสด'
+                                  : `•••${b.account_last4}`}
+                                {done && !docsOk ? ' · รูปยังไม่ครบ' : ''}
+                              </button>
+                            )
+                          })()}
+                        </div>
                         <div style={{ fontSize: 11, color: '#aaa' }}>
                           {e.emp_code || 'ยังไม่มีรหัส'}
                           {!e.is_active && e.resigned_date && (
@@ -877,6 +903,13 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
       {settleEmp && (
         <ResignSettleModal emp={settleEmp} role={role} onClose={() => setSettleEmp(null)}
           onDone={(m) => { setSettleEmp(null); showToast(m); fetchSettle() }} />
+      )}
+
+      {/* 🆕 ใบยืนยันเลขบัญชี */}
+      {bankEmp && (
+        <BankAccountPanel emp={bankEmp}
+          position={(Array.isArray(bankEmp.job_roles) ? bankEmp.job_roles : []).map(r => ROLE_LABEL[r] || r).join(', ')}
+          onClose={() => setBankEmp(null)} onSaved={fetchBank} />
       )}
 
       {/* ═══ 🆕 Modal ส่งเข้าโปรแกรมตามตำแหน่ง ═══ */}
