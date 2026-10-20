@@ -34,7 +34,10 @@ function saturdayCycleStart(today) {
   return start < monthFirst ? monthFirst : start;
 }
 
-export default function AdvanceSummaryCard() {
+// 🆕 20 ต.ค. 69 systemTaken = { employee_id: [{name, amount}] } รายการหักที่ระบบคิดเองของรอบเสาร์นี้
+//   (หักคืนค่าแรงรอบก่อน · สายยกมา · ค่าสมัครงาน) — ไม่อยู่ในตารางรายจ่าย แต่จะถูกหักจากค่าแรงรอบนี้
+//   จึงต้องนับเป็น "เบิกแล้ว" ด้วย ไม่งั้นเบิกเกินวงเงิน · ใช้กับพนักงานรายเสาร์เท่านั้น
+export default function AdvanceSummaryCard({ systemTaken = {} }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -146,7 +149,14 @@ export default function AdvanceSummaryCard() {
   }, [load]);
 
   // แสดงพนักงานที่ทำงานอยู่ทุกคน (แม้ยังเบิกได้ 0 เพื่อให้เห็นชื่อครบ)
-  const shown = rows;
+  //   รวมรายการหักที่ระบบคิดเอง (systemTaken) ตอนแสดงผล — ไม่ต้องดึงข้อมูลใหม่เมื่อรอบเสาร์คิดเสร็จ
+  const shown = rows.map((r) => {
+    const sys = r.isEom ? [] : (systemTaken[r.id] || []);
+    if (!sys.length) return r;
+    const taken = r.taken + sys.reduce((s, a) => s + a.amount, 0);
+    const breakdown = [...r.breakdown, ...sys].sort((x, y) => y.amount - x.amount);
+    return { ...r, taken, breakdown, remaining: Math.max(0, r.earned - taken) };
+  });
   const totalRemaining = shown.reduce((s, r) => s + r.remaining, 0);
 
   return (
