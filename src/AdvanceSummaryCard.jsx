@@ -34,10 +34,13 @@ function saturdayCycleStart(today) {
   return start < monthFirst ? monthFirst : start;
 }
 
-// 🆕 20 ต.ค. 69 systemTaken = { employee_id: [{name, amount}] } รายการหักที่ระบบคิดเองของรอบเสาร์นี้
-//   (หักคืนค่าแรงรอบก่อน · สายยกมา · ค่าสมัครงาน) — ไม่อยู่ในตารางรายจ่าย แต่จะถูกหักจากค่าแรงรอบนี้
-//   จึงต้องนับเป็น "เบิกแล้ว" ด้วย ไม่งั้นเบิกเกินวงเงิน · ใช้กับพนักงานรายเสาร์เท่านั้น
-export default function AdvanceSummaryCard({ systemTaken = {} }) {
+// 🆕 20 ต.ค. 69 satView = { employee_id: {workDays, wage, extra, items:[{name,amount}], toPay} }
+//   ยอดของรอบเสาร์ที่วันนี้อยู่ คิดจากตัวเดียวกับตารางรอบเสาร์ (WeeklyPage) → พนักงานรายเสาร์ใช้ตัวเลขนี้
+//   หาได้ = ค่าแรงรอบนี้ที่หักสาย/ครึ่งวัน/ออกกลางวันแล้ว + รายได้จ่ายเสาร์ · เบิกแล้ว = รายการหักของรอบนี้
+//   (รวมรายการที่ระบบคิดเอง) · เบิกได้อีก = ยอดที่ใบเสาร์จะจ่าย
+//   รายการที่ HR ตั้งให้หักสิ้นเดือน → โชว์ไว้ให้เห็น แต่ไม่นับ (ไม่ได้หักจากเงินวันเสาร์)
+//   ไม่มีข้อมูลในตารางรอบเสาร์ (ยังไม่กดคำนวณเงินเดือน/ยังไม่มีเวลาเข้างานของรอบ) → ใช้สูตรเดิม
+export default function AdvanceSummaryCard({ satView = {} }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
@@ -78,7 +81,7 @@ export default function AdvanceSummaryCard({ systemTaken = {} }) {
       // 3) รายการ "เบิก" ตั้งแต่ต้นเดือน → วันนี้ (กรองด้วยชื่อประเภทที่มีคำว่า "เบิก")
       const { data: deds, error: e3 } = await supabase
         .from("deductions")
-        .select("employee_id, amount, deduct_date, deduction_types(name)")
+        .select("employee_id, amount, deduct_date, deduct_cycle, deduction_types(name)")
         .in("employee_id", empIds)
         .gte("deduct_date", monthFirstStr)
         .lte("deduct_date", todayStr);
@@ -132,6 +135,9 @@ export default function AdvanceSummaryCard({ systemTaken = {} }) {
           earned,
           taken,
           breakdown,
+          // รายการที่ตั้งให้หักสิ้นเดือน (ของคนรายเสาร์) — โชว์ให้เห็นเฉย ๆ เมื่อใช้ยอดจากรอบเสาร์
+          monthEndItems: isEom ? [] : empAdvs.filter((a) => a.deduct_cycle && a.deduct_cycle !== "saturday")
+            .map((a) => ({ name: a.deduction_types?.name || "อื่นๆ", amount: Number(a.amount || 0) })),
           remaining,
         };
       });
@@ -149,13 +155,16 @@ export default function AdvanceSummaryCard({ systemTaken = {} }) {
   }, [load]);
 
   // แสดงพนักงานที่ทำงานอยู่ทุกคน (แม้ยังเบิกได้ 0 เพื่อให้เห็นชื่อครบ)
-  //   รวมรายการหักที่ระบบคิดเอง (systemTaken) ตอนแสดงผล — ไม่ต้องดึงข้อมูลใหม่เมื่อรอบเสาร์คิดเสร็จ
   const shown = rows.map((r) => {
-    const sys = r.isEom ? [] : (systemTaken[r.id] || []);
-    if (!sys.length) return r;
-    const taken = r.taken + sys.reduce((s, a) => s + a.amount, 0);
-    const breakdown = [...r.breakdown, ...sys].sort((x, y) => y.amount - x.amount);
-    return { ...r, taken, breakdown, remaining: Math.max(0, r.earned - taken) };
+    const v = r.isEom ? null : satView[r.id];
+    if (!v) return { ...r, info: [] };
+    const taken = v.items.reduce((s, a) => s + a.amount, 0);
+    const bmap = {};
+    for (const a of v.items) bmap[a.name] = (bmap[a.name] || 0) + a.amount;
+    const breakdown = Object.entries(bmap).map(([name, amount]) => ({ name, amount })).sort((x, y) => y.amount - x.amount);
+    const earned = v.wage + v.extra;
+    return { ...r, fromCycle: true, workDays: v.workDays, earned, taken, breakdown,
+      info: r.monthEndItems || [], remaining: Math.max(0, Math.round(earned - taken)) };
   });
   const totalRemaining = shown.reduce((s, r) => s + r.remaining, 0);
 
@@ -238,6 +247,11 @@ export default function AdvanceSummaryCard({ systemTaken = {} }) {
                                   {b.name} {fmtInt(b.amount)}
                                 </div>
                               ))}
+                              {(r.info || []).map((b, i) => (
+                                <div key={"i" + i} style={{ fontStyle: "italic" }}>
+                                  {b.name} {fmtInt(b.amount)} (หักสิ้นเดือน ไม่นับ)
+                                </div>
+                              ))}
                             </div>
                           </div>
                         ) : (
@@ -270,7 +284,7 @@ export default function AdvanceSummaryCard({ systemTaken = {} }) {
                 </tfoot>
               </table>
               <p style={st.note}>
-                * ดูอย่างเดียว · หาได้ = ค่าแรงต่อวัน × วันลงงานในรอบ (ไม่นับวันอาทิตย์) · เบิกแล้ว = ทุกประเภทในรายจ่ายพนักงานรวมกัน · เบิกได้อีก = หาได้ − เบิกแล้ว
+                * ดูอย่างเดียว · 🔵 รายเสาร์: ตัวเลขชุดเดียวกับตารางรอบเสาร์ด้านล่าง — หาได้ = ค่าแรงรอบนี้ที่หักสาย/ครึ่งวัน/ออกกลางวันแล้ว + รายได้จ่ายเสาร์ · เบิกแล้ว = รายการหักของรอบนี้ (รวมหักคืนค่าแรงรอบก่อน) · เบิกได้อีก = ยอดที่ใบเสาร์จะจ่าย · 💜 สิ้นเดือน: หาได้ = ค่าแรงต่อวัน × วันลงงานตั้งแต่ต้นเดือน (ไม่นับวันอาทิตย์) − รายจ่ายทุกประเภท
               </p>
             </div>
           )}

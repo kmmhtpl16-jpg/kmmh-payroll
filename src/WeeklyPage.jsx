@@ -343,20 +343,6 @@ export default function WeeklyPage({ role }) {
   //   - จับไม่ได้ / ไม่มี cycle_id → รอบเสาร์สุดท้ายที่มีจริง
   // ════════════════════════════════════════════════════════════
   const saturdayCycles = cycles.filter(c => !c.isMonthEnd);
-  // 🆕 20 ต.ค. 69 รายการหักที่ระบบคิดเอง (ไม่อยู่ในตารางรายจ่าย) ของรอบเสาร์ที่วันนี้อยู่
-  //   เช่น หักคืนค่าแรงรอบก่อน · สายยกมา · ค่าสมัครงาน → ส่งให้การ์ด "เบิกได้อีกเท่าไหร่" นับเป็นยอดที่เอาไปแล้ว
-  const systemTaken = (() => {
-    const todayStr = toLocalDateStr(new Date());
-    const cur = saturdayCycles.find(c => toLocalDateStr(c.dateFrom) <= todayStr && todayStr <= toLocalDateStr(c.dateTo));
-    const m = {};
-    if (!cur) return m;
-    payrolls.forEach(r => {
-      if (r.employees?.pay_schedule === "end_of_month") return;
-      const items = getAdvancesInCycle(r.employee_id, cur).filter(a => !advances.includes(a));
-      if (items.length) m[r.employee_id] = items.map(a => ({ name: a.deduction_types?.name || "อื่นๆ", amount: Number(a.amount || 0) }));
-    });
-    return m;
-  })();
   const extraAssign = {}; // empId → { cycleKey → amount }
   for (const e of extraIncome) {
     // v5.1: รวม ot และ other (position ติดป้ายสิ้นเดือน → ตกในก้อนสิ้นเดือนเอง)
@@ -386,6 +372,24 @@ export default function WeeklyPage({ role }) {
       disburse_on: e.disburse_on || "month_end",
     });
   }
+
+  // 🆕 20 ต.ค. 69 ยอดของรอบเสาร์ที่วันนี้อยู่ ส่งให้การ์ด "เบิกได้อีกเท่าไหร่" ใช้ตัวเลขชุดเดียวกับตารางรอบเสาร์
+  //   หาได้ = ค่าแรงรอบนี้ (หักสาย/ครึ่งวัน/ออกกลางวันแล้ว) + รายได้จ่ายเสาร์ · เบิกแล้ว = รายการหักของรอบนี้ทั้งหมด
+  //   (รวมรายการที่ระบบคิดเอง: หักคืนค่าแรงรอบก่อน · สายยกมา · ค่าสมัครงาน) → เบิกได้อีก = ยอดที่ใบเสาร์จะจ่าย
+  const satAdvanceView = (() => {
+    const todayStr = toLocalDateStr(new Date());
+    const cur = saturdayCycles.find(c => toLocalDateStr(c.dateFrom) <= todayStr && todayStr <= toLocalDateStr(c.dateTo));
+    const m = {};
+    if (!cur) return m;
+    getSaturdayRows(cur).forEach(row => {
+      m[row.record.employee_id] = {
+        workDays: row.workDays, wage: row.wage, extra: row.extra,
+        items: row.advItems.map(a => ({ name: a.deduction_types?.name || "อื่นๆ", amount: Number(a.amount || 0) })),
+        toPay: row.toPay,
+      };
+    });
+    return m;
+  })();
 
   const allNetTotal      = payrolls.reduce((s,r) => s + (r.net_pay ?? (r.total_income||0)-(r.total_deduct||0)), 0);
   const allSaturdayTotal = payrolls.reduce((s,r) => s + getEmpSaturdayTotal(r), 0);
@@ -763,7 +767,7 @@ export default function WeeklyPage({ role }) {
       )}
 
       {/* การ์ดสรุป "เบิกได้อีกเท่าไหร่" — อ่านอย่างเดียว, โหลดข้อมูลเอง ไม่ผูกกับการคำนวณเงินเดือน */}
-      <AdvanceSummaryCard systemTaken={systemTaken} />
+      <AdvanceSummaryCard satView={satAdvanceView} />
 
       {msg && (
         <div style={{ ...s.msgBox,
