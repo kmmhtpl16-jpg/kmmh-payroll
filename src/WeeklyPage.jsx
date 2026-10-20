@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
-import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { ResignSettleModal } from "./ResignSettlePanel"; import { calcLateDeduction, midLeaveFactor, paydayCarry } from "./payrollCalc"; import { paydayOf, PAYDAY_RULE_START } from "./attendanceLogic";
+import AdvanceSummaryCard from "./AdvanceSummaryCard"; import { ResignSettleModal } from "./ResignSettlePanel"; import { paydayCarry } from "./payrollCalc"; import { calcCycleWageForEmployee, isCycleWorkLog, prevCycleOverpay } from "./weeklyCalc"; import { paydayOf, PAYDAY_RULE_START } from "./attendanceLogic";
 
 const MONTHS_SHORT = ["","ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."]; const DOW_TH = ["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."];
 
@@ -85,36 +85,6 @@ function buildCyclesFromCalendar(year, month, logDates) {
     });
   }
   return cycles;
-}
-
-// 🆕 v7.10 น้ำหนักวันทำงานต่อ 1 log ให้ตรงกับ payrollCalc (กันรอบเสาร์คิดวันเต็มแล้วหักสายซ้ำ)
-//   ครึ่งวันทุกชนิด (ขาด/ลาป่วย/ลากิจครึ่งวัน) = มาทำงานจริงครึ่งวัน → จ่ายครึ่งที่มา 0.5
-//   ขาดงานเต็มวัน=0 · ออกระหว่างวัน=ตามชั่วโมงจริง (midLeaveFactor) · อื่นๆ=1
-//   หมายเหตุ: ครึ่งที่ใช้สิทธิ์ลา จ่ายที่สิ้นเดือนเอง (net − satTotal): ลาป่วย/ลากิจครึ่งวัน net=เต็มวัน
-//   → เสาร์จ่าย 0.5 (ครึ่งที่มา) สิ้นเดือนจ่ายอีก 0.5 (ครึ่งสิทธิ์); ขาดงานครึ่งวัน net=0.5 → สิ้นเดือน 0
-function cycleDayWeight(l, emp) {
-  const note = l.hr_note || "";
-  // 🔧 9 ต.ค. 69 วันหยุดบริษัท → รอบเสาร์ไม่จ่ายใครเลย (เจ้าของกำหนด: เงินวันหยุดจ่ายสิ้นเดือนเท่านั้น)
-  //   ประจำ: payrollCalc นับเป็นวันจ่าย → สิ้นเดือน (สุทธิ − ยอดเสาร์) จ่ายให้เอง · ทดลองงาน: ไม่จ่ายทั้งเดือน (v7.16)
-  if (/วันหยุดบริษัท/.test(note)) return 0;
-  // 🆕 15 ต.ค.69 ลาครึ่งวันแต่ไม่ได้มาเลย ("… + ขาดครึ่งวัน") → ไม่มีครึ่งที่มาทำงาน รอบเสาร์ไม่จ่าย
-  //   ครึ่งที่ใช้สิทธิ์ลา จ่ายสิ้นเดือนเอง (payrollCalc นับ 0.5 · สิ้นเดือน = สุทธิ − เสาร์)
-  if (/ครึ่งวัน \+ ขาดครึ่งวัน/.test(note)) return 0;
-  if (/ครึ่งวัน/.test(note)) return 0.5;   // ครึ่งวันทุกชนิด → จ่ายครึ่งที่มาทำงาน
-  if (/ขาด/.test(note)) return 0;
-  if (/ออกระหว่างวัน/.test(note)) return midLeaveFactor(l.scan_pm_out || l.scan_am_out, l.scan_am_out);
-  return 1;
-}
-
-function calcCycleWageForEmployee(record, logsInCycle, WTAG) {
-  const nonSun = logsInCycle.filter(
-    l => new Date(l.work_date + "T00:00:00").getDay() !== 0
-  );
-  const workDays = nonSun.reduce((s, l) => s + cycleDayWeight(l, record.employees), 0);
-  if (!workDays || !record.work_days) return { workDays: 0, wage: 0 };
-  const dailyRate = record.base_wage / record.work_days;
-  const hourlyRate = dailyRate / 8; const _emp = record.employees || {}; let _lateDed = 0; nonSun.forEach(l => { const _rate = (WTAG && WTAG[record.employee_id + "_" + l.work_date]) || ((_emp.probation && !/แจ้งล่วงหน้า/.test(l.hr_note || "")) ? 5 : 1); _lateDed += calcLateDeduction(l.late_minutes || 0, _rate, hourlyRate) + parseFloat(l.hr_extra_deduct || 0); }); const wage = Math.round(dailyRate * workDays - _lateDed);
-  return { workDays: Math.round(workDays * 100) / 100, wage };
 }
 
 export default function WeeklyPage({ role }) {
@@ -281,14 +251,7 @@ export default function WeeklyPage({ role }) {
     const f = toLocalDateStr(cycle.dateFrom), t = toLocalDateStr(cycle.dateTo);
     return allLogs.filter(l => {
       if (l.employee_id !== empId || l.work_date < f || l.work_date > t) return false;
-      if (new Date(l.work_date + "T00:00:00").getDay() === 0) return false;
-      const n = l.hr_note || "";
-      // 🆕 v5.5: "ครึ่งวัน" ทุกชนิด (ขาด/ลาป่วย/ลากิจครึ่งวัน) = มาทำงานจริงครึ่งวัน
-      //   → ครึ่งที่มา จ่ายตามรอบรับ (cycleDayWeight คืน 0.5); ครึ่งสิทธิ์ลา จ่ายสิ้นเดือนเอง (net − satTotal)
-      if (/ครึ่งวัน \+ ขาดครึ่งวัน/.test(n)) return false; // 🆕 15 ต.ค.69 ไม่ได้มาเลย → ไปคิดสิ้นเดือน
-      if (/ครึ่งวัน/.test(n)) return true;
-      // ขาด/ลาป่วย/ลากิจ (เต็มวัน) = ไม่มีวันลงงาน → ยกไปคิดรวมสิ้นเดือน
-      return !/ขาด|ลาป่วย|ลากิจ/.test(n);
+      return isCycleWorkLog(l);
     });
   }
 
@@ -313,6 +276,18 @@ export default function WeeklyPage({ role }) {
         // 🆕 v7.15 วันเงินเดือนออกจ่ายเต็มวันไปแล้ว แต่บ่ายลา/ขาด/ออกกลางวัน → หักคืนรอบเสาร์แรก
         if (cr.dayDeduct > 0) list.push({ employee_id: empId, amount: cr.dayDeduct, deduct_date: cr.date,
           deduction_types: { name: "หักคืนค่าแรงงวดก่อน" } });
+      }
+      // 🆕 20 ต.ค. 69 รอบเสาร์ก่อนจ่ายเกิน (บ่ายวันเสาร์ออกก่อน/ลา/สาย หรือ HR แก้ย้อนหลัง) → หักรอบนี้
+      const satCycles = cycles.filter(c => !c.isMonthEnd);
+      const ci = satCycles.findIndex(c => getCycleKey(c) === getCycleKey(cycle));
+      if (ci > 0 && pr) {
+        const prevC = satCycles[ci - 1];
+        const over = prevCycleOverpay(pr, vouchers[getCycleKey(prevC)], getLogsInCycle(empId, prevC), lateTagMap);
+        if (over > 0) {
+          const d = prevC.dateTo;
+          list.push({ employee_id: empId, amount: over, deduct_date: toLocalDateStr(d),
+            deduction_types: { name: `หักคืนค่าแรงรอบ ${d.getDate()}/${d.getMonth() + 1}` } });
+        }
       }
     }
     return list;
