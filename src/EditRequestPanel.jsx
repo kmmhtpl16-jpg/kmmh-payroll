@@ -17,6 +17,56 @@ async function signedUrl(path) {
   return data.signedUrl;
 }
 
+// ── สรุปว่าคำขอนี้ "เปลี่ยนอะไรจริง" จาก old_data / new_data (27 ต.ค.69) ──
+//   เดิมการ์ดโชว์แค่ "โน้ตเก่า → โน้ตใหม่" พอ HR แก้แค่เวลา โน้ตเหมือนเดิม การ์ดเลยขึ้น ก่อน = หลัง ทุกตัวอักษร
+//   ตอนนี้เทียบทีละช่อง แล้วคืนเฉพาะแถวที่เปลี่ยน + หัวเรื่องภาษาคน
+const TIME_FIELDS = [
+  ["scan_am_in", "เข้างาน"], ["scan_am_out", "ออกพัก"],
+  ["scan_pm_in", "เข้าบ่าย"], ["scan_pm_out", "เลิกงาน"],
+];
+const hhmm = (v) => (v ? String(v).slice(0, 5) : "");
+const bahtText = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 2 }) + " บ.";
+
+function editChanges(oldData, newData) {
+  const o = oldData || {}, n = newData || {};
+  const rows = [];
+  const timeLabels = { edit: [], add: [], remove: [] };
+  for (const [key, label] of TIME_FIELDS) {
+    const a = hhmm(o[key]), b = hhmm(n[key]);
+    if (a === b) continue;
+    rows.push({ key, label, from: a || "—", to: b || "—" });
+    timeLabels[!a ? "add" : !b ? "remove" : "edit"].push(label);
+  }
+  const noteFrom = o.hr_note || "", noteTo = n.hr_note || "";
+  const noteChanged = noteFrom !== noteTo;
+  if (noteChanged) rows.push({ key: "hr_note", label: "หมายเหตุ", from: noteFrom || "—", to: noteTo || "—", long: true });
+  const dFrom = Number(o.hr_extra_deduct) || 0, dTo = Number(n.hr_extra_deduct) || 0;
+  if (dFrom !== dTo) rows.push({ key: "hr_extra_deduct", label: "หักเพิ่ม", from: bahtText(dFrom), to: bahtText(dTo) });
+  const xFrom = o.hr_extra_note || "", xTo = n.hr_extra_note || "";
+  const xChanged = xFrom !== xTo;
+  if (xChanged) rows.push({ key: "hr_extra_note", label: "เหตุผลที่หัก", from: xFrom || "—", to: xTo || "—", long: true });
+
+  const parts = [];
+  if (noteChanged) parts.push(noteTo ? `เปลี่ยนเป็น “${noteTo}”` : "ลบหมายเหตุ");
+  if (timeLabels.edit.length) parts.push(`แก้เวลา${timeLabels.edit.join(" + ")}`);
+  if (timeLabels.add.length) parts.push(`เพิ่มเวลา${timeLabels.add.join(" + ")}ที่ลืมสแกน`);
+  if (timeLabels.remove.length) parts.push(`ลบเวลา${timeLabels.remove.join(" + ")}`);
+  if (dFrom !== dTo) parts.push("แก้ยอดหักเพิ่ม");
+  else if (xChanged) parts.push("แก้เหตุผลที่หัก");
+
+  return { rows, title: parts.join(" · "), noChange: rows.length === 0 };
+}
+
+const TH_DOW = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+const TH_MON = ["", "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+function dayLabelLong(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "";
+  const [y, mo, d] = [+m[1], +m[2], +m[3]];
+  const dow = new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+  return `${TH_DOW[dow]} ${d} ${TH_MON[mo]} ${String(y + 543).slice(-2)}`;
+}
+
 async function compressImage(file, maxDim = 1200) {
   if (!file.type.startsWith("image/")) return file;   // pdf ส่งตรง
   return new Promise((resolve) => {
@@ -64,6 +114,8 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
   const impact = impactOf({
     emp, workDate: log.work_date, oldNote: log.hr_note, newNote: d.storedNote,
     oldLate: log.late_minutes, newLate: d.lateMinutes,
+    oldOt: log.ot_hours, newOt: d.otHours,
+    oldExtra: log.hr_extra_deduct, newExtra: parseFloat(extraDeduct) || 0,
   });
   const changed = d.storedNote !== (log.hr_note || "") ||
     d.times.scan_am_in !== (log.scan_am_in || "") || d.times.scan_am_out !== (log.scan_am_out || "") ||
@@ -82,24 +134,29 @@ export function EditRequestModal({ log, emp, role, onClose, onSent }) {
       const up = await supabase.storage.from("receipts").upload(path, comp, { upsert: false });
       if (up.error) throw new Error("อัปไฟล์ไม่สำเร็จ: " + up.error.message);
 
+      const oldData = {
+        hr_note: log.hr_note, scan_am_in: log.scan_am_in, scan_am_out: log.scan_am_out,
+        scan_pm_in: log.scan_pm_in, scan_pm_out: log.scan_pm_out,
+        late_minutes: log.late_minutes, ot_hours: log.ot_hours,
+        hr_extra_deduct: log.hr_extra_deduct, hr_extra_note: log.hr_extra_note,
+      };
+      const newData = {
+        hr_note: d.storedNote,
+        ...d.times,
+        hr_extra_deduct: parseFloat(extraDeduct) || 0,
+        hr_extra_note: extraNote || null,
+      };
+      // ป้ายนี้ไปโผล่ใน Telegram ด้วย → บอกแถวที่เปลี่ยนจริง (เช่น "เลิกงาน 18:36 → 19:06") ไม่ใช่โน้ตยาวซ้ำกัน
+      const ch = editChanges(oldData, newData);
+      const brief = ch.rows.map((x) => x.long ? `${x.label}: ${x.to}` : `${x.label} ${x.from} → ${x.to}`).join(" · ");
       const { error } = await supabase.from("edit_requests").insert({
         target_table: "attendance_logs",
         target_id: log.id,
-        target_label: `${emp?.nickname || log.employees?.nickname || "-"} · ${dayLabelTH(log.work_date)} (${log.hr_note || "ไม่มีโน้ต"} → ${d.storedNote || "-"})`,
+        target_label: `${emp?.nickname || log.employees?.nickname || "-"} · ${dayLabelTH(log.work_date)} · ${brief || "ไม่มีอะไรเปลี่ยน"}`,
         employee_id: log.employee_id,
         request_kind: "edit",
-        old_data: {
-          hr_note: log.hr_note, scan_am_in: log.scan_am_in, scan_am_out: log.scan_am_out,
-          scan_pm_in: log.scan_pm_in, scan_pm_out: log.scan_pm_out,
-          late_minutes: log.late_minutes, ot_hours: log.ot_hours,
-          hr_extra_deduct: log.hr_extra_deduct, hr_extra_note: log.hr_extra_note,
-        },
-        new_data: {
-          hr_note: d.storedNote,
-          ...d.times,
-          hr_extra_deduct: parseFloat(extraDeduct) || 0,
-          hr_extra_note: extraNote || null,
-        },
+        old_data: oldData,
+        new_data: newData,
         reason: reason.trim(),
         evidence_url: path,
         impact_note: impact,
@@ -244,11 +301,38 @@ export function EditRequestBar({ role, refreshKey, onApplied }) {
   const load = async () => {
     const { data, error } = await supabase
       .from("edit_requests")
-      .select("*, employees(nickname, emp_code)")
+      .select("*, employees(nickname, emp_code, emp_type, daily_rate, monthly_salary, probation)")
       .eq("status", "pending")
       .order("requested_at", { ascending: false })
       .limit(50);
-    if (!error) setRows(data || []);
+    if (error) return;
+    // วันที่ทำงานไม่ได้เก็บในคำขอ → ดึงจากแถวบันทึกเวลา (ใช้โชว์วัน + คำนวณเงินใหม่ให้รวม OT)
+    const ids = (data || []).filter((r) => r.target_table === "attendance_logs").map((r) => r.target_id);
+    let dates = {};
+    if (ids.length) {
+      const { data: logs } = await supabase.from("attendance_logs").select("id, work_date").in("id", ids);
+      (logs || []).forEach((l) => { dates[l.id] = l.work_date; });
+    }
+    setRows((data || []).map((r) => {
+      const workDate = dates[r.target_id] || null;
+      const ch = editChanges(r.old_data, r.new_data);
+      let impact = r.impact_note;
+      if (workDate && r.employees) {
+        const o = r.old_data || {}, n = r.new_data || {};
+        const d = deriveFromNote({
+          note: n.hr_note,
+          times: { scan_am_in: n.scan_am_in || "", scan_am_out: n.scan_am_out || "",
+                   scan_pm_in: n.scan_pm_in || "", scan_pm_out: n.scan_pm_out || "" },
+          empCode: r.employees.emp_code, workDate,
+        });
+        impact = impactOf({
+          emp: r.employees, workDate, oldNote: o.hr_note, newNote: d.storedNote,
+          oldLate: o.late_minutes, newLate: d.lateMinutes, oldOt: o.ot_hours, newOt: d.otHours,
+          oldExtra: o.hr_extra_deduct, newExtra: n.hr_extra_deduct,
+        });
+      }
+      return { ...r, _workDate: workDate, _ch: ch, _impact: impact };
+    }));
   };
   useEffect(() => { load(); }, [refreshKey]);
 
@@ -260,8 +344,11 @@ export function EditRequestBar({ role, refreshKey, onApplied }) {
   };
 
   const approve = async (r) => {
-    const label = r.target_label || "รายการนี้";
-    if (!window.confirm(`อนุมัติและแก้ให้เลยไหม?\n\n${label}\n${r.impact_note || ""}`)) return;
+    if (r._ch?.noChange) return;   // ไม่มีอะไรเปลี่ยน → ให้ HR ส่งใหม่ ไม่ให้อนุมัติ
+    const who = `${r.employees?.nickname || "-"}${r._workDate ? " · " + dayLabelLong(r._workDate) : ""}`;
+    const label = r._ch?.title ? `${who} · ${r._ch.title}` : (r.target_label || "รายการนี้");
+    const lines = (r._ch?.rows || []).map((x) => `${x.label}: ${x.from} → ${x.to}`).join("\n");
+    if (!window.confirm(`อนุมัติและแก้ให้เลยไหม?\n\n${label}\n${lines}\n\n💰 ${r._impact || ""}`)) return;
     setBusyId(r.id); setMsg(null);
     try {
       // ดึงแถวจริงมาคำนวณสาย/OT ด้วยกติกาเดียวกับหน้าแก้ไข (เผื่อข้อมูลเปลี่ยนหลังยื่นคำขอ)
@@ -340,13 +427,49 @@ export function EditRequestBar({ role, refreshKey, onApplied }) {
           background: msg.type === "ok" ? "#f0fdf4" : "#fef2f2",
           color: msg.type === "ok" ? "#166534" : "#991b1b" }}>{msg.text}</div>
       )}
-      {rows.map((r) => (
+      {rows.map((r) => {
+        const ch = r._ch || { rows: [], noChange: true, title: "" };
+        return (
         <div key={r.id} style={st.reqCard}>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, color: "#1e293b" }}>{r.target_label}</div>
-            <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>เหตุผล: {r.reason}</div>
-            {r.impact_note && <div style={{ fontSize: 12, color: "#b45309", marginTop: 2 }}>💰 {r.impact_note}</div>}
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+          <div style={{ flex: "1 1 100%", minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: "#1e293b" }}>
+              👤 {r.employees?.nickname || "-"}{r._workDate ? ` · ${dayLabelLong(r._workDate)}` : ""}
+            </div>
+            <div style={{ fontSize: 13, color: "#334155", marginTop: 4 }}>
+              <b>เรื่อง: {ch.title || "—"}</b>
+              {r.reason && <span style={{ color: "#64748b" }}>  (HR: {r.reason})</span>}
+            </div>
+
+            {ch.noChange ? (
+              <div style={st.noChangeBox}>⚠️ คำขอนี้ไม่ได้เปลี่ยนอะไรเลย — ให้ HR ส่งใหม่</div>
+            ) : (
+              <table style={st.diffTable}>
+                <thead>
+                  <tr>
+                    <th style={st.diffTh}></th>
+                    <th style={st.diffTh}>เดิม</th>
+                    <th style={st.diffTh}></th>
+                    <th style={st.diffTh}>ขอแก้เป็น</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ch.rows.map((x) => (
+                    <tr key={x.key}>
+                      <td style={st.diffLabel}>{x.label}</td>
+                      <td style={{ ...st.diffOld, ...(x.long ? st.diffLong : {}) }}>{x.from}</td>
+                      <td style={st.diffArrow}>→</td>
+                      <td style={{ ...st.diffNew, ...(x.long ? st.diffLong : {}) }}>{x.to}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {r._impact && (
+              <div style={{ fontSize: 13, marginTop: 6, fontWeight: 600,
+                color: r._impact === "ไม่กระทบยอดเงิน" ? "#166534" : "#b45309" }}>💰 {r._impact}</div>
+            )}
+            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
               ขอโดย {r.requested_by || "-"} · {new Date(r.requested_at).toLocaleString("th-TH")}
             </div>
           </div>
@@ -356,9 +479,11 @@ export function EditRequestBar({ role, refreshKey, onApplied }) {
             )}
             {role === "owner" ? (
               <>
-                <button onClick={() => approve(r)} disabled={busyId === r.id} style={st.okSmall}>
-                  {busyId === r.id ? "⏳" : "✅ อนุมัติ"}
-                </button>
+                {!ch.noChange && (
+                  <button onClick={() => approve(r)} disabled={busyId === r.id} style={st.okSmall}>
+                    {busyId === r.id ? "⏳" : "✅ อนุมัติ"}
+                  </button>
+                )}
                 <button onClick={() => reject(r)} disabled={busyId === r.id} style={st.noSmall}>✖ ไม่อนุมัติ</button>
               </>
             ) : (
@@ -369,7 +494,8 @@ export function EditRequestBar({ role, refreshKey, onApplied }) {
             )}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -410,6 +536,15 @@ const st = {
     cursor: "pointer", fontSize: 12, fontWeight: 700 },
   noSmall: { padding: "6px 12px", borderRadius: 8, border: "1.5px solid #fecaca", background: "#fef2f2",
     color: "#b91c1c", cursor: "pointer", fontSize: 12, fontWeight: 700 },
+  diffTable: { borderCollapse: "collapse", marginTop: 8, fontSize: 14, width: "100%", maxWidth: 360 },
+  diffTh: { textAlign: "left", fontSize: 11, color: "#94a3b8", fontWeight: 600, padding: "0 6px 2px" },
+  diffLabel: { padding: "4px 6px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" },
+  diffOld: { padding: "4px 6px", color: "#64748b", textDecoration: "line-through" },
+  diffArrow: { padding: "4px 2px", color: "#b45309", fontWeight: 700 },
+  diffNew: { padding: "4px 8px", background: "#fef08a", color: "#1e293b", fontWeight: 800, borderRadius: 6 },
+  diffLong: { fontSize: 12, fontWeight: 600, wordBreak: "break-word" },
+  noChangeBox: { marginTop: 8, padding: "8px 10px", borderRadius: 8, background: "#fef2f2",
+    border: "1.5px solid #fca5a5", color: "#b91c1c", fontWeight: 700, fontSize: 13 },
   waitTag: { padding: "6px 12px", borderRadius: 8, background: "#fef3c7", color: "#92400e",
     fontSize: 12, fontWeight: 700 },
 };

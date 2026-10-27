@@ -87,7 +87,9 @@ const baht = (n) =>
 // ── ข้อความ "ผลกระทบต่อเงิน" ให้เจ้าของดูก่อนกดอนุมัติ ──
 //   นับเฉพาะ 2 อย่างที่คำนวณตรงได้: ค่าแรงของวันนั้น + ค่าปรับสาย
 //   เบี้ยขยัน/ปกส. ไม่รวม เพราะขึ้นกับทั้งเดือน — บอกไว้ในข้อความว่ายังไม่รวม
-export function impactOf({ emp, workDate, oldNote, newNote, oldLate, newLate }) {
+//   🆕 27 ต.ค.69 นับ OT ด้วย (เคสจูเนียร์/จ๋า 26 ต.ค. เลิกงาน 18:36 → 19:06 = OT 2.5 → 3 แต่การ์ดขึ้น "ไม่กระทบยอดเงิน")
+//   หน่วย OT × ค่าแรงรายชั่วโมง (ค่าแรงวัน ÷ 8) — ตรงกับ payrollCalc ot_amount
+export function impactOf({ emp, workDate, oldNote, newNote, oldLate, newLate, oldOt, newOt, oldExtra, newExtra }) {
   const rate = dayRateOf(emp, workDate);
   const wOld = dayWeightOfNote(oldNote);
   const wNew = dayWeightOfNote(newNote);
@@ -109,6 +111,24 @@ export function impactOf({ emp, workDate, oldNote, newNote, oldLate, newLate }) 
     const d = (lo - ln) * r;
     total += d;
     parts.push(`ค่าปรับสาย ${lo} → ${ln} นาที (${baht(d)} บ.)`);
+  }
+
+  if (oldOt !== undefined && newOt !== undefined) {
+    const oo = Number(oldOt) || 0, on = Number(newOt) || 0;
+    if (oo !== on) {
+      // ปัดแบบเดียวกับ payrollCalc: ค่าแรงวัน 2 ตำแหน่ง → รายชั่วโมง 2 ตำแหน่ง
+      const hourly = Math.round(Math.round(rate * 100) / 100 / 8 * 100) / 100;
+      const d = (on - oo) * hourly;
+      total += d;
+      parts.push(`OT ${oo} → ${on} (${baht(d)} บ.)`);
+    }
+  }
+
+  const xo = Number(oldExtra) || 0, xn = Number(newExtra) || 0;
+  if (xo !== xn) {
+    const d = xo - xn;
+    total += d;
+    parts.push(`หักเพิ่ม ${xo} → ${xn} บ. (${baht(d)} บ.)`);
   }
 
   const hadLeaveOld = /ลาป่วย|ลากิจ|ขาดงาน/.test(String(oldNote || ""));
