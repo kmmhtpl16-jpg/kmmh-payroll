@@ -1,6 +1,7 @@
 // src/App.jsx
 import { useState } from "react";
 import LoginPage from "./LoginPage";
+import { signOut } from "./supabase";
 import AttendancePage from "./AttendancePage";
 import EmployeesPage from "./EmployeesPage";
 import DeductionsPage from "./DeductionsPage";
@@ -41,7 +42,8 @@ export default function App() {
         <div style={styles.roleTag}>
           {role === "owner" ? "👑 เจ้าของ" : "🧑‍💼 HR"}
         </div>
-        <button onClick={() => setRole(null)} style={styles.logoutBtn}>🔒 ออก</button>
+        {/* ออก = ทิ้ง session ด้วย ไม่งั้นคนถัดไปที่เข้าเครื่องนี้ได้สิทธิ์ของคนเก่าค้างอยู่ */}
+        <button onClick={async () => { await signOut(); setRole(null); }} style={styles.logoutBtn}>🔒 ออก</button>
       </header>
       <nav style={styles.tabBar}>
         {TABS.map((t) => (

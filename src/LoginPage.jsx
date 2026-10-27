@@ -58,7 +58,7 @@ export default function LoginPage({ onLogin }) {
       if (data === "owner" || data === "hr") {
         // แลก PIN เป็น session จริงก่อน ไม่งั้น RLS จะปฏิเสธทุก query (anon)
         setLoading(true);
-        const ok = await ensureSession(candidate);
+        const ok = await ensureSession(candidate, data);
         setLoading(false);
         if (!ok) {
           setPin("");

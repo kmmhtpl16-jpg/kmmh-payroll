@@ -30,8 +30,12 @@ const ALLOWED_ROLES = ['owner', 'hr']
 //
 // ⚠️ ถ้ามี session ค้างอยู่ ต้องเช็ค role ก่อนเสมอ
 //    ห้าม return true ทันที (บั๊กเดิม: ใช้ session ของ staff → บันทึกไม่ได้)
+// 🆕 27 ต.ค.69 ต้องตรงกับ role ของ PIN ที่เพิ่งกด (wantedRole) ไม่ใช่แค่ owner/hr อะไรก็ได้
+//    บั๊ก: HR เข้าเครื่องนี้ก่อน → session hr ค้าง → เจ้าของกด PIN เจ้าของ จอขึ้น "เจ้าของ"
+//    แต่ฐานข้อมูลยังเห็นเป็น hr → กดอนุมัติคำขอแก้ไขไม่ได้ ("เฉพาะเจ้าของเท่านั้น...")
 // ─────────────────────────────────────────────
-export async function ensureSession(pin) {
+export async function ensureSession(pin, wantedRole) {
+  if (!ALLOWED_ROLES.includes(wantedRole)) return false
   try {
     const { data: { session } } = await supabase.auth.getSession()
     if (session?.user?.id) {
@@ -40,9 +44,9 @@ export async function ensureSession(pin) {
         .select('role')
         .eq('id', session.user.id)
         .maybeSingle()
-      if (me && ALLOWED_ROLES.includes(me.role)) return true
+      if (me && me.role === wantedRole) return true
       // session ผิดคน/ผิดสิทธิ์ → ล้างทิ้ง แล้วขอใหม่ด้วย PIN
-      await supabase.auth.signOut()
+      await signOut()
     }
 
     const resp = await fetch(`${URL}/functions/v1/login`, {
@@ -51,12 +55,20 @@ export async function ensureSession(pin) {
       body: JSON.stringify({ pin }),
     })
     const j = await resp.json()
-    if (resp.ok && j.access_token) {
-      await supabase.auth.setSession({
+    if (resp.ok && j.access_token && j.role === wantedRole) {
+      const { data: set, error: setErr } = await supabase.auth.setSession({
         access_token: j.access_token,
         refresh_token: j.refresh_token,
       })
-      return true
+      if (setErr || !set?.session?.user?.id) return false
+      // ยืนยันจากฐานข้อมูลอีกชั้นว่า session ที่ติดตั้งแล้วเป็น role เดียวกับ PIN จริง
+      const { data: me } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', set.session.user.id)
+        .maybeSingle()
+      if (me?.role === wantedRole) return true
+      await signOut()
     }
   } catch (e) {
     console.error('ensureSession', e)
@@ -64,6 +76,13 @@ export async function ensureSession(pin) {
   return false
 }
 
+// ออกจากระบบ — ถ้าแจ้งเซิร์ฟเวอร์ไม่สำเร็จ (เน็ตหลุด ฯลฯ) อย่างน้อยต้องล้าง session ในเครื่องทิ้ง
 export async function signOut() {
-  try { await supabase.auth.signOut() } catch (e) { console.error('signOut', e) }
+  try {
+    const { error } = await supabase.auth.signOut()
+    if (!error) return
+    console.error('signOut', error)
+  } catch (e) { console.error('signOut', e) }
+  try { await supabase.auth.signOut({ scope: 'local' }) } catch (e) { console.error('signOut local', e) }
+  try { localStorage.removeItem('sb-kmmh-payroll-auth') } catch { /* ไม่มี storage ก็ไม่มีอะไรค้าง */ }
 }
