@@ -1,6 +1,7 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.17
+// คำนวณเงินเดือน KMMH — v7.18
+// 🔧 v7.18 (31 ต.ค. 69) ปกส.: ฐาน = เงินเดือนหักวันขาด (ค่าจ้างที่ได้รับจริง) กับประจำทุกคน · ปัดเป็นบาทเต็ม
 // 🔧 v7.17 (9 ต.ค. 69) คืนค่าสมัครงาน 100 ตอนลาออก ให้คนที่ระบบหักเองด้วย (สถานะยังเป็น none)
 // 🔧 v7.15 (3 ต.ค. 69) วันเงินเดือนออก: ใบสิ้นเดือนทำก่อนเลิกงาน → ถ้าสแกนเข้าเช้าแล้ว เดือนนั้นนับเต็มวัน
 //   บ่ายลา/ขาด/ออกกลางวันทีหลัง → ส่วนที่ไม่ได้ทำ ยกไปหักเดือนถัดไปในช่อง leave_deduct (หักลา/ขาด)
@@ -263,11 +264,13 @@ function calcDiligenceBonus(totalLateMin, hasLeave, empType) {
 // 🔧 v7.12 เพิ่มฐานขั้นต่ำ 1,650 ตามกฎ ปกส.
 //   มีผลเฉพาะเดือนที่ค่าจ้างจริงต่ำกว่า 1,650 (เข้า/ออกต้นเดือน) — คนปกติไม่กระทบ
 //   ค่าจ้าง 0 (ไม่ได้ทำงานเลย) → ไม่มีเงินสมทบ
-function calcSocialSecurity(empType, base) {
+function calcSocialSecurity(empType, base, roundBaht = true) {
   if (empType !== "permanent") return 0;
   const b = Number(base) || 0;
   if (b <= 0) return 0;
-  return Math.min(parseFloat((Math.max(b, 1650) * 0.05).toFixed(2)), 875);
+  // 🔧 v7.18 ปัดเป็นบาทเต็มตามกฎ ปกส. (≥ 0.50 ปัดขึ้น · < 0.50 ปัดลง) — เดิมเก็บทศนิยม 487.50 / 512.50
+  const ss = Math.max(b, 1650) * 0.05;
+  return Math.min(roundBaht ? Math.round(ss) : parseFloat(ss.toFixed(2)), 875);
 }
 
 // 🔧 v7 — map insurance_level ให้ตรง enum จริงใน DB ('none'/'200'/'500')
@@ -577,11 +580,17 @@ export async function calcPayroll(year, month) {
     //   เดิมใช้ monthly_salary เต็มเดือน → ปกส. สูงเกินจริง
     //   (เคสพี K017 ลาออก 17 ก.ย.69: ฐาน 9,500 → ปกส. 475 ทั้งที่ได้ค่าจ้างจริง 3,800 → ต้องเป็น 190)
     // 🔧 v7.12 เข้าประจำกลางเดือน → บวก holiday_wage เข้าฐานด้วย (ค้างมาจาก v7.11)
+    // 🔧 v7.18 (31 ต.ค. 69 เจ้าของสั่ง) ใช้ "ค่าจ้างที่ได้รับจริง" กับพนักงานประจำทุกคน ไม่ใช่แค่คนเข้า/ออกกลางเดือน
+    //   = เงินเดือนหักวันขาด/ลาไม่รับค่าจ้าง/ชั่วโมงที่ออกระหว่างวัน (perm_base + ค่าวันอาทิตย์)
+    //   ไม่นับ OT · เบี้ยขยัน · เงินประจำตำแหน่ง · รายได้อื่น (เจ้าของเคาะ "เงินเดือนหักวันขาด อย่างเดียว")
+    //   ไม่เกินเงินเดือนเต็ม · เดิมคนทำงานทั้งเดือนใช้เงินเดือนเต็มเสมอ → ขาดงานแล้ว ปกส. ยังหักเต็ม
     const ss_wage_actual  = parseFloat((perm_base + holiday_wage).toFixed(2));
-    const ss_base         = (permStartInMonth || isResigningThisMonth)
-      ? ss_wage_actual
-      : (emp.monthly_salary || base_wage);
-    const social_security = calcSocialSecurity(emp.emp_type, ss_base);
+    //   มีผลตั้งแต่งวด ต.ค. 69 (2026-10) · งวดก่อนหน้าคิดแบบเดิม ให้ใบ ปกส. ย้อนหลังตรงกับที่หักจริง
+    const ssRuleV718      = ce * 100 + month >= 202610;
+    const ss_base         = ssRuleV718
+      ? (emp.monthly_salary ? Math.min(ss_wage_actual, Number(emp.monthly_salary)) : ss_wage_actual)
+      : ((permStartInMonth || isResigningThisMonth) ? ss_wage_actual : (emp.monthly_salary || base_wage));
+    const social_security = calcSocialSecurity(emp.emp_type, ss_base, ssRuleV718);
 
     // 🔧 v7.6 — ประกันงาน: เดือนที่ลาออก "ไม่หัก" (ไม่ฝากเข้ากระปุก)
     //   เดิม v7.1 ใช้ตัวเลือก A (เดือนลาออกหักต่อ แล้วคืนทั้งก้อน) → สุทธิเท่ากัน
