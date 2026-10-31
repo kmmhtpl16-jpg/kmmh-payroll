@@ -78,6 +78,11 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
   const [modalOpen, setModalOpen] = useState(false)
   const [editId, setEditId] = useState(null)
   const [editIsActive, setEditIsActive] = useState(true)   // 🆕 เก็บสถานะเดิม กันบั๊กปลุกกลับมา
+  // 🆕 31 ต.ค. 69 ปรับเงินเดือนพร้อมวันที่มีผล (มีผลวันที่ 1 ของเดือนเท่านั้น · ตาราง salary_changes)
+  const [salaryLocked, setSalaryLocked] = useState(false)    // ประจำเดิมที่มีเงินเดือนแล้ว → แก้ผ่านปุ่มปรับเงินเดือนเท่านั้น
+  const [salChanges, setSalChanges] = useState([])
+  const [salForm, setSalForm] = useState(null)               // { amount, month, note } · null = ปิดกล่อง
+  const [salSaving, setSalSaving] = useState(false)
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState(null)
@@ -280,6 +285,9 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
     if (emp) {
       setEditId(emp.id)
       setEditIsActive(emp.is_active)   // 🆕 จำสถานะเดิมไว้
+      setSalaryLocked(emp.emp_type === 'permanent' && !!emp.monthly_salary)
+      setSalForm(null)
+      loadSalChanges(emp.id)
       setForm({
         job_roles: Array.isArray(emp.job_roles) ? emp.job_roles : [],
         emp_code: emp.emp_code || '',
@@ -299,12 +307,53 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
     } else {
       setEditId(null)
       setEditIsActive(true)            // 🆕 เพิ่มใหม่ = active
+      setSalaryLocked(false); setSalForm(null); setSalChanges([])
       setForm(EMPTY_FORM)
     }
     setModalOpen(true)
   }
 
   function closeModal() { setModalOpen(false); setDevLink(null) }
+
+  // ── 🆕 ปรับเงินเดือน ──
+  const TH_MONTHS = ['','ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.']
+  function monthLabel(d) { const [y, m] = String(d).slice(0, 7).split('-').map(Number); return `1 ${TH_MONTHS[m]} ${y + 543}` }
+  function curMonthKey(add = 0) { const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() + add, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` }
+  async function loadSalChanges(empId) {
+    const { data, error } = await supabase.from('salary_changes')
+      .select('id, effective_month, old_salary, new_salary, note, status, created_by_role, created_at')
+      .eq('employee_id', empId).neq('status', 'cancelled').order('effective_month', { ascending: false })
+    setSalChanges(error ? [] : (data || []))
+  }
+  async function saveSalaryChange() {
+    const amt = Number(salForm?.amount)
+    if (!amt || amt <= 0) { showToast('ใส่เงินเดือนใหม่ก่อน', 'error'); return }
+    if (!salForm.month) { showToast('เลือกเดือนที่มีผล', 'error'); return }
+    if (salForm.month < curMonthKey(1)) { showToast('เลือกได้ตั้งแต่เดือนหน้าเป็นต้นไป', 'error'); return }
+    const isNow = false
+    const msg = `ปรับเงินเดือน ${form.nickname} เป็น ${amt.toLocaleString('th-TH')} บาท\nมีผลตั้งแต่ ${monthLabel(salForm.month + '-01')}` +
+      (isNow ? '\n\n⚠️ เป็นเดือนปัจจุบัน — มีผลทันทีทั้งเดือน ต้องกดคำนวณเงินเดือนเดือนนี้ใหม่' : '\n\nระบบจะเปลี่ยนให้เองเมื่อถึงวันที่ 1')
+    if (!window.confirm(msg)) return
+    setSalSaving(true)
+    const { data, error } = await supabase.rpc('salary_change_schedule', {
+      p_employee: editId, p_month: salForm.month + '-01', p_salary: amt, p_note: salForm.note || null })
+    setSalSaving(false)
+    if (error || !data?.ok) { showToast('บันทึกไม่ได้: ' + (error?.message || data?.error), 'error'); return }
+    showToast(data.applied ? 'ปรับเงินเดือนแล้ว มีผลเดือนนี้ ✓' : `ตั้งปรับเงินเดือนแล้ว มีผล ${monthLabel(salForm.month + '-01')} ✓`)
+    setSalForm(null)
+    if (data.applied) {
+      setF('monthly_salary', String(amt))
+      fetchEmployees()
+    }
+    loadSalChanges(editId)
+  }
+  async function cancelSalaryChange(row) {
+    if (!window.confirm(`ยกเลิกการปรับเงินเดือนเป็น ${Number(row.new_salary).toLocaleString('th-TH')} (มีผล ${monthLabel(row.effective_month)}) ?`)) return
+    const { data, error } = await supabase.rpc('salary_change_cancel', { p_id: row.id })
+    if (error || !data?.ok) { showToast('ยกเลิกไม่ได้: ' + (error?.message || data?.error), 'error'); return }
+    showToast('ยกเลิกแล้ว ✓')
+    loadSalChanges(editId)
+  }
 
   function setF(k, v) { setForm(f => ({ ...f, [k]: v })) }
 
@@ -351,6 +400,11 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
       // 🔧 บั๊กเดิม: เคย hardcode true เสมอ → คนลาออกจะถูกปลุกกลับมา
       //    แก้: ตอนแก้ไข ใช้สถานะเดิม / ตอนเพิ่มใหม่ = true
       is_active: editId ? editIsActive : true,
+    }
+    // 🆕 เงินเดือนถูกล็อก → ไม่ส่งเงินเดือน/ค่าแรงวันไปทับ (กันค่าเก่าในฟอร์มทับเงินเดือนที่ระบบปรับให้ตอนวันที่ 1)
+    if (editId && salaryLocked && form.emp_type === 'permanent') {
+      delete payload.monthly_salary
+      delete payload.daily_rate
     }
     let error, savedId = editId
     if (editId) {
@@ -785,7 +839,67 @@ export default function EmployeesPage({ role, scanPrefill, onPrefillUsed, onDevi
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>เงินเดือน (บาท) *</div>
                   <input type="number" value={form.monthly_salary} onChange={e => setF('monthly_salary', e.target.value)} placeholder="เช่น 13000"
-                    style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                    readOnly={salaryLocked}
+                    title={salaryLocked ? 'แก้ผ่านปุ่ม "ปรับเงินเดือน" เพื่อใส่วันที่มีผล' : ''}
+                    style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box',
+                      background: salaryLocked ? '#f2f2f0' : '#fff', color: salaryLocked ? '#666' : '#000' }} />
+                  {salaryLocked && !salForm && (
+                    <button type="button" onClick={() => setSalForm({ amount: '', month: curMonthKey(1), note: '' })}
+                      style={{ marginTop: 6, fontSize: 12, padding: '4px 10px', borderRadius: 8, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#5b21b6', cursor: 'pointer' }}>
+                      📅 ปรับเงินเดือน
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {form.emp_type === 'permanent' && salaryLocked && (salForm || salChanges.length > 0) && (
+                <div style={{ gridColumn: '1/-1', background: '#faf8ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: 12 }}>
+                  {salForm && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>เงินเดือนใหม่ (บาท)</div>
+                        <input type="number" value={salForm.amount} onChange={e => setSalForm(f => ({ ...f, amount: e.target.value }))} placeholder="เช่น 10000"
+                          style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 500, color: '#666', marginBottom: 4 }}>มีผลตั้งแต่วันที่ 1 ของเดือน</div>
+                        <input type="month" value={salForm.month} min={curMonthKey(1)} onChange={e => setSalForm(f => ({ ...f, month: e.target.value }))}
+                          style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                      </div>
+                      <div style={{ gridColumn: '1/-1' }}>
+                        <input type="text" value={salForm.note} onChange={e => setSalForm(f => ({ ...f, note: e.target.value }))} placeholder="หมายเหตุ (ถ้ามี) เช่น ปรับประจำปี"
+                          style={{ width: '100%', height: 34, borderRadius: 8, border: '0.5px solid #ccc', padding: '0 10px', boxSizing: 'border-box' }} />
+                      </div>
+                      <div style={{ gridColumn: '1/-1', fontSize: 11.5, color: '#6b21a8', lineHeight: 1.5 }}>
+                        {salForm.month ? `มีผล ${monthLabel(salForm.month + '-01')} · ` : ''}ทั้งเดือนนั้นคิดด้วยเงินเดือนใหม่ (ค่าแรงวัน วันอาทิตย์ ประกันสังคม ตามไปด้วย) · เดือนก่อนหน้ายังใช้เงินเดือนเดิม
+                      </div>
+                      <div style={{ gridColumn: '1/-1', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button type="button" onClick={() => setSalForm(null)} style={{ fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '0.5px solid #ccc', background: '#fff', cursor: 'pointer' }}>ยกเลิก</button>
+                        <button type="button" disabled={salSaving} onClick={saveSalaryChange}
+                          style={{ fontSize: 12, padding: '6px 12px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', cursor: 'pointer', opacity: salSaving ? 0.6 : 1 }}>
+                          {salSaving ? 'กำลังบันทึก…' : 'บันทึกการปรับเงินเดือน'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {salChanges.length > 0 && (
+                    <div style={{ marginTop: salForm ? 12 : 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#5b21b6', marginBottom: 6 }}>ประวัติการปรับเงินเดือน</div>
+                      {salChanges.map(c => (
+                        <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, padding: '4px 0', borderTop: '0.5px solid #ede9fe' }}>
+                          <span style={{ minWidth: 92 }}>{monthLabel(c.effective_month)}</span>
+                          <span style={{ flex: 1 }}>
+                            {c.old_salary != null ? Number(c.old_salary).toLocaleString('th-TH') + ' → ' : ''}<b>{Number(c.new_salary).toLocaleString('th-TH')}</b>
+                            {c.note ? <span style={{ color: '#888' }}> · {c.note}</span> : null}
+                          </span>
+                          {c.status === 'pending'
+                            ? <><span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#fef3c7', color: '#92400e' }}>รอถึงวันที่ 1</span>
+                                <button type="button" onClick={() => cancelSalaryChange(c)} style={{ fontSize: 11, border: 'none', background: 'none', color: '#b91c1c', cursor: 'pointer' }}>ยกเลิก</button></>
+                            : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#dcfce7', color: '#166534' }}>มีผลแล้ว</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

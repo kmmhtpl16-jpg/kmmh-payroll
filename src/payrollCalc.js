@@ -1,6 +1,7 @@
 // src/payrollCalc.js
 // ─────────────────────────────────────────────────────────────
-// คำนวณเงินเดือน KMMH — v7.18
+// คำนวณเงินเดือน KMMH — v7.19
+// 🆕 v7.19 (31 ต.ค. 69) เงินเดือนตามเดือนที่มีผล (ตาราง salary_changes)
 // 🔧 v7.18 (31 ต.ค. 69) ปกส.: ฐาน = เงินเดือนหักวันขาด (ค่าจ้างที่ได้รับจริง) กับประจำทุกคน · ปัดเป็นบาทเต็ม
 // 🔧 v7.17 (9 ต.ค. 69) คืนค่าสมัครงาน 100 ตอนลาออก ให้คนที่ระบบหักเองด้วย (สถานะยังเป็น none)
 // 🔧 v7.15 (3 ต.ค. 69) วันเงินเดือนออก: ใบสิ้นเดือนทำก่อนเลิกงาน → ถ้าสแกนเข้าเช้าแล้ว เดือนนั้นนับเต็มวัน
@@ -279,6 +280,33 @@ function insuranceAmount(level) {
   return map[level] || 0;
 }
 
+// 🆕 v7.19 เงินเดือนตามงวด จากตาราง salary_changes (ไม่นับรายการที่ยกเลิก)
+export async function applySalaryForPeriod(emps, periodFrom) {
+  const ids = (emps || []).filter(e => e.emp_type === "permanent").map(e => e.id);
+  if (!ids.length) return emps;
+  const { data, error } = await supabase
+    .from("salary_changes")
+    .select("employee_id, effective_month, old_salary, new_salary, status")
+    .in("employee_id", ids)
+    .neq("status", "cancelled");
+  // อ่านไม่ได้ → หยุด (ไม่เดาเงินเดือน · คำนวณเดือนเก่าด้วยเงินเดือนใหม่จะจ่ายผิด)
+  if (error) throw new Error("อ่านประวัติปรับเงินเดือนไม่ได้: " + error.message);
+  if (!data || !data.length) return emps;
+  return emps.map(e => {
+    const rows = data.filter(r => r.employee_id === e.id)
+      .sort((a, b) => String(a.effective_month).localeCompare(String(b.effective_month)));
+    if (!rows.length) return e;
+    const past = rows.filter(r => String(r.effective_month) <= periodFrom);
+    let sal = null;
+    if (past.length) sal = Number(past[past.length - 1].new_salary);
+    // ยังไม่มีรายการที่มีผลถึงงวดนี้: ถ้ารายการแรกมีผลไปแล้ว (เงินเดือนปัจจุบันถูกเปลี่ยนแล้ว) → ใช้เงินเดือนเดิมของมัน
+    //   ถ้ายังรออยู่ → เงินเดือนปัจจุบันคือของงวดนี้อยู่แล้ว
+    else if (rows[0].status === "applied" && rows[0].old_salary != null) sal = Number(rows[0].old_salary);
+    if (!sal || sal === Number(e.monthly_salary)) return e;
+    return { ...e, monthly_salary: sal };
+  });
+}
+
 // ════════════════════════════════════════════════════════════
 // calcPayroll — entry point หลัก
 // ════════════════════════════════════════════════════════════
@@ -312,8 +340,14 @@ export async function calcPayroll(year, month) {
   const empMap = new Map();
   (activeEmps   || []).forEach(e => empMap.set(e.id, e));
   (resignedEmps || []).forEach(e => empMap.set(e.id, e));  // ทับ/เพิ่ม คนลาออก
-  const employees = [...empMap.values()]
+  const employeesRaw = [...empMap.values()]
     .sort((a, b) => String(a.emp_code).localeCompare(String(b.emp_code)));
+
+  // 🆕 v7.19 (31 ต.ค. 69) ปรับเงินเดือนพร้อมวันที่มีผล (ตาราง salary_changes · มีผลวันที่ 1 ของเดือนเท่านั้น)
+  //   เงินเดือนของงวดนี้ = รายการล่าสุดที่มีผลไม่เกินวันที่ 1 ของงวด → เงินเดือนใหม่
+  //   ถ้าไม่มี แต่มีรายการที่มีผลหลังงวดนี้ → เงินเดือนเดิมของรายการแรกหลังงวด (คำนวณเดือนเก่าใหม่ ไม่เอาเงินเดือนใหม่มาปน)
+  //   ไม่มีรายการเลย → ใช้ employees.monthly_salary เหมือนเดิม · ตารางยังไม่มี/อ่านไม่ได้ → ใช้แบบเดิม
+  const employees = await applySalaryForPeriod(employeesRaw, dateFrom);
 
   // ── ดึง attendance_logs ทั้งเดือน ──
   const empIds = employees.map(e => e.id);
