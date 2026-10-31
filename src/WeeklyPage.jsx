@@ -316,9 +316,22 @@ export default function WeeklyPage({ role }) {
       .filter(row => row.workDays > 0 || row.advAmt > 0 || row.extra > 0);
   }
 
+  // 🆕 31 ต.ค. 69 วันสุดท้ายของเดือนตรงวันเสาร์ → รอบเสาร์สุดท้ายรวมจ่ายในใบสิ้นเดือนใบเดียว (เจ้าของสั่ง)
+  //   ใช้เฉพาะเมื่อรอบนั้นยังไม่มีใบเบิกที่ยื่น/อนุมัติแล้ว (ถ้า HR ยื่นใบรอบนั้นไปแล้ว ทำงานแบบเดิม)
+  //   ใบสิ้นเดือน = สุทธิทั้งเดือน − เสาร์รอบก่อน ๆ → ยอดรอบนี้อยู่ในใบสิ้นเดือนเอง ไม่จ่ายซ้ำ
+  const mergedCycleKey = (() => {
+    const dim = new Date(year, month, 0).getDate();
+    const c = cycles.find(c => !c.isMonthEnd && c.toDay === dim);
+    if (!c) return null;
+    const k = getCycleKey(c);
+    const v = vouchers[k];
+    if (v && v.status !== "returned" && v.status !== "cancelled") return null;
+    return k;
+  })();
+
   function getEmpSaturdayTotal(r) {
     if (r.employees?.pay_schedule === "end_of_month") return 0;
-    return cycles.filter(c => !c.isMonthEnd).reduce((sum, c) => {
+    return cycles.filter(c => !c.isMonthEnd && getCycleKey(c) !== mergedCycleKey).reduce((sum, c) => {
       const _v = vouchers[getCycleKey(c)]; if (_v && (_v.status === "approved" || _v.status === "submitted") && _v.lines) { const _ln = _v.lines.find(x => x.employee_id === r.employee_id); return sum + (_ln ? Number(_ln.to_pay || 0) : 0); } const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c), lateTagMap);
       const extra = getExtraInCycle(r.employee_id, c);
       const adv = getAdvanceInCycle(r.employee_id, c);
@@ -807,7 +820,9 @@ export default function WeeklyPage({ role }) {
         const rows       = getSaturdayRows(cycle);
         const voucher    = vouchers[cycleKey];
         const totalPay   = rows.reduce((s,r) => s + r.toPay, 0);
-        const statusInfo = voucher ? STATUS_LABEL[voucher.status] : null; const isCollapsed = collapsed[cycleKey] !== undefined ? collapsed[cycleKey] : (voucher?.status === "approved");
+        const isMerged   = cycleKey === mergedCycleKey;
+        const statusInfo = isMerged ? { text: "💜 รวมจ่ายในใบสิ้นเดือน", bg: "#ede9fe", color: "#5b21b6" }
+                         : voucher ? STATUS_LABEL[voucher.status] : null; const isCollapsed = collapsed[cycleKey] !== undefined ? collapsed[cycleKey] : (voucher?.status === "approved");
 
         return (
           <div key={cycleKey} style={s.cycleCard}>
@@ -873,13 +888,19 @@ export default function WeeklyPage({ role }) {
                 </div>
             }
 
-            {voucher && <VoucherInfo voucher={voucher} />}
+            {isMerged
+              ? <div style={{ margin:"10px 16px 14px", padding:"10px 14px", borderRadius:10, background:"#f5f3ff",
+                  border:"1px solid #c4b5fd", color:"#4c1d95", fontSize:13, lineHeight:1.6 }}>
+                  💜 <b>รอบนี้จบตรงวันสิ้นเดือน — ไม่ต้องยื่นใบรอบนี้</b> ยอดในตารางนี้รวมอยู่ในช่อง "จ่ายสิ้นเดือน" แล้ว
+                  ยื่นใบสิ้นเดือนใบเดียว และโอนครั้งเดียวต่อคน (ตารางนี้ไว้ดูประกอบ)
+                </div>
+              : <>{voucher && <VoucherInfo voucher={voucher} />}
             <VoucherActions role={role} cycleKey={cycleKey} voucher={voucher} rows={rows} locked={period?.is_closed}
               totalPay={totalPay} submitting={submitting} approving={approving}
               onSubmit={() => submitVoucher(cycle, rows, false)}
               onApprove={() => approveVoucher(cycleKey)}
               onReturn={() => setReturnModal({ cycleKey })}
-              onPrint={() => openPrintModal(voucher)} /></div>
+              onPrint={() => openPrintModal(voucher)} /></>}</div>
           </div>
         );
       })}
@@ -904,7 +925,7 @@ export default function WeeklyPage({ role }) {
             <div style={{ ...s.cycleHeader, background:"#4c1d95", cursor:"pointer" }} onClick={() => setCollapsed(p => ({ ...p, month_end: !meCollapsed }))}>
               <div>
                 <span style={s.cycleLabel}>{meCollapsed ? "▶" : "▼"} 💜 จ่ายสิ้นเดือน</span>
-                <span style={s.cycleDates}>ส่วนที่เหลือ = สุทธิทั้งเดือน − จ่ายเสาร์แล้ว</span>
+                <span style={s.cycleDates}>{mergedCycleKey ? "รวมรอบเสาร์สุดท้ายแล้ว · " : ""}ส่วนที่เหลือ = สุทธิทั้งเดือน − จ่ายเสาร์แล้ว</span>
               </div>
               <span style={{ ...s.statusBadge,
                 background: statusInfo?.bg || "#f1f5f9",
