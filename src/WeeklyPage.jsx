@@ -301,9 +301,21 @@ export default function WeeklyPage({ role }) {
     return extraAssign[empId]?.[getCycleKey(cycle)] || 0;
   }
 
+  // 🆕 14 พ.ย. 69 คนที่มีใบเคลียเงินลาออกแล้ว (ยื่น/อนุมัติ) ไม่ต้องอยู่ในรอบเสาร์ที่ยังไม่มีใบ
+  //   ใบเคลียลาออก = สุทธิทั้งเดือน − ใบเสาร์ที่ยื่น/อนุมัติแล้ว → ค่าแรงรอบที่ยังไม่มีใบจ่ายไปกับใบเคลียแล้ว
+  //   (เคสต้อม K009 14 พ.ย.: ใบเคลีย 943 อนุมัติแล้ว แต่รอบ 9–14 พ.ย. ยังขึ้น 843 → ถ้ายื่นจะจ่ายซ้ำ)
+  //   รอบที่มีใบยื่น/อนุมัติแล้วและมีชื่อคนนั้นอยู่ ยังแสดงตามเดิม
+  function settledByResign(empId, cycle) {
+    if (!resignVs[empId]) return false;
+    const v = vouchers[getCycleKey(cycle)];
+    const locked = v && (v.status === "approved" || v.status === "submitted") && Array.isArray(v.lines);
+    return !(locked && v.lines.some(l => l.employee_id === empId));
+  }
+
   function getSaturdayRows(cycle) {
     return payrolls
       .filter(r => r.employees?.pay_schedule !== "end_of_month")
+      .filter(r => !settledByResign(r.employee_id, cycle))
       .map(r => {
         const logs   = getLogsInCycle(r.employee_id, cycle);
         const { workDays, wage } = calcCycleWageForEmployee(r, logs, lateTagMap);
@@ -332,7 +344,7 @@ export default function WeeklyPage({ role }) {
   function getEmpSaturdayTotal(r) {
     if (r.employees?.pay_schedule === "end_of_month") return 0;
     return cycles.filter(c => !c.isMonthEnd && getCycleKey(c) !== mergedCycleKey).reduce((sum, c) => {
-      const _v = vouchers[getCycleKey(c)]; if (_v && (_v.status === "approved" || _v.status === "submitted") && _v.lines) { const _ln = _v.lines.find(x => x.employee_id === r.employee_id); return sum + (_ln ? Number(_ln.to_pay || 0) : 0); } const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c), lateTagMap);
+      const _v = vouchers[getCycleKey(c)]; if (_v && (_v.status === "approved" || _v.status === "submitted") && _v.lines) { const _ln = _v.lines.find(x => x.employee_id === r.employee_id); return sum + (_ln ? Number(_ln.to_pay || 0) : 0); } if (settledByResign(r.employee_id, c)) return sum; const { wage } = calcCycleWageForEmployee(r, getLogsInCycle(r.employee_id, c), lateTagMap);
       const extra = getExtraInCycle(r.employee_id, c);
       const adv = getAdvanceInCycle(r.employee_id, c);
       return sum + Math.max(0, Math.round(wage + extra - adv));
