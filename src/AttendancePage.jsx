@@ -58,7 +58,11 @@ function processAttendance(rows, employees) {
     String(a.emp_code || "").localeCompare(String(b.emp_code || "")) ||
     String(a.work_date || "").localeCompare(String(b.work_date || ""));
   return rows.map((r) => {
-    const emp = employees.find((e) => e.emp_code === r.empCode);
+    // 🆕 16 พ.ย. 69 คนลาออกแล้ว ยังจับคู่ได้ถึงวันที่ลาออก (เคสต้อม ออก 14 พ.ย. · ดึงเวลาวันเสาร์ 14 ไม่ได้)
+    const sameCode = employees.filter((e) => e.emp_code === r.empCode);
+    const emp = sameCode.find((e) => e.is_active !== false) ||
+      sameCode.find((e) => e.resigned_date && r.date <= String(e.resigned_date).slice(0, 10));
+    const goneEmp = !emp ? sameCode.find((e) => e.resigned_date) : null;
     // 🆕 ส่ง date เข้าไปด้วย → calcDay รู้ว่าวันไหนเป็นเสาร์ (คิดเฉพาะสายเช้า)
     const { lateMin, otHours } = calcDay({
       checkIn: r.checkIn, lunchOut: r.lunchOut,
@@ -78,7 +82,9 @@ function processAttendance(rows, employees) {
       ot_hours: otHours,
       lunch_ot: false,
       needs_hr_review: r.needsReview || !emp,
-      hr_note: !emp ? `ไม่พบพนักงาน emp_code=${r.empCode}` : (r.reason || null),
+      hr_note: !emp
+        ? (goneEmp ? `ลาออกแล้วตั้งแต่ ${goneEmp.resigned_date} (${goneEmp.nickname || r.empCode})` : `ไม่พบพนักงาน emp_code=${r.empCode}`)
+        : (r.reason || null),
     };
   }).sort(byEmpThenDate);
 }
@@ -213,7 +219,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
       if (error) throw error;
       setScanSync(data?.last_sync || null);
       // วันเริ่มงาน = วันเริ่มทดลองงาน (ถ้าไม่มีใช้วันบรรจุ) → ก่อนวันนั้นไม่ใส่แถว "ไม่สแกนเลย"
-      const activeCodes = new Map(employees.map((e) => [e.emp_code, e.trial_start_date || e.permanent_start_date || ""]));
+      const activeCodes = new Map(employees.filter((e) => e.is_active !== false).map((e) => [e.emp_code, e.trial_start_date || e.permanent_start_date || ""]));
       const { rows, skipped, sundays } = punchesToRows(data?.punches || [], deviceMap, dates, activeCodes);
       setSkippedRows(skipped);
       setFileName(scanImportName(scanFrom, scanTo));
@@ -265,8 +271,10 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
     // 🆕 ดึงฐานค่าแรงมาด้วย → ใช้คำนวณ "ผลกระทบต่อเงิน" ให้เจ้าของดูก่อนอนุมัติคำขอแก้ไข
     const { data } = await supabase
       .from("employees")
-      .select("id, emp_code, nickname, full_name, emp_type, monthly_salary, daily_rate, probation, trial_start_date, permanent_start_date")
-      .eq("is_active", true).order("emp_code");
+      .select("id, emp_code, nickname, full_name, emp_type, monthly_salary, daily_rate, probation, trial_start_date, permanent_start_date, is_active, resigned_date")
+      // 🆕 16 พ.ย. 69 ดึงคนที่ลาออกภายใน 120 วันมาด้วย → ยังนำเข้าเวลาวันที่ยังทำงานอยู่ได้ (ถึงวันที่ลาออก)
+      .or(`is_active.eq.true,resigned_date.gte.${new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10)}`)
+      .order("emp_code");
     if (data) setEmployees(data);
   };
 
@@ -757,7 +765,7 @@ export default function AttendancePage({ role, onAddFromScanner, linkedHint, onH
                         <select value={linkPick.emp} onChange={(e) => setLinkPick((p) => ({ ...p, emp: e.target.value }))}
                           style={{ height:30, borderRadius:6, border:"1px solid #ddd", fontSize:13 }}>
                           <option value="">— เลือกพนักงาน —</option>
-                          {employees.map((e) => <option key={e.id} value={e.id}>{e.emp_code} {e.nickname}</option>)}
+                          {employees.filter((e) => e.is_active !== false).map((e) => <option key={e.id} value={e.id}>{e.emp_code} {e.nickname}</option>)}
                         </select>
                         <span style={{ fontSize:12 }}>เริ่มใช้</span>
                         <input type="date" value={linkPick.from} onChange={(e) => setLinkPick((p) => ({ ...p, from: e.target.value }))}
